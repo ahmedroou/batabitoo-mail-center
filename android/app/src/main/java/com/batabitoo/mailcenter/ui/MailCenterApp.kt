@@ -65,6 +65,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -371,6 +372,8 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
                         android.widget.Toast.makeText(context, "تم نسخ البريد", android.widget.Toast.LENGTH_SHORT).show()
                     },
                     onDelete = { deleteTarget = inbox },
+                    onConfirmBan = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "confirmed") } } else null,
+                    onMarkSafe = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "safe") } } else null,
                 )
             }
         }
@@ -533,15 +536,103 @@ private fun InteractiveHeroChip(
 }
 
 @Composable
+private fun BanConfirmationBox(
+    reason: String,
+    onConfirmBan: () -> Unit,
+    onMarkSafe: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
+        border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Rounded.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFD97706),
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "اشتباه حظر: هل تم حظر أو تقييد هذا الحساب فعلاً؟",
+                    color = Color(0xFF92400E),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (reason.isNotBlank()) {
+                Text(
+                    text = "سبب الاشتباه: $reason",
+                    color = Color(0xFFB45309),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = onConfirmBan,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BannedRed),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.weight(1f).height(30.dp),
+                ) {
+                    Text(
+                        "تأكيد الحظر ⛔",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                    )
+                }
+                OutlinedButton(
+                    onClick = onMarkSafe,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Green),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Green),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.weight(1f).height(30.dp),
+                ) {
+                    Text(
+                        "الحساب سليم ✅",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun InboxRow(
     inbox: Inbox,
     active: Boolean,
     onClick: () -> Unit,
     onCopyEmail: () -> Unit,
     onDelete: () -> Unit,
+    onConfirmBan: (() -> Unit)? = null,
+    onMarkSafe: (() -> Unit)? = null,
 ) {
     val accent = when {
-        inbox.isBanned -> BannedRed
+        inbox.isConfirmedBanned -> BannedRed
+        inbox.isSuspected -> Color(0xFFF59E0B)
         inbox.isAmazon -> AmazonOrange
         inbox.isOfficial -> OfficialGold
         else -> Cyan
@@ -558,147 +649,172 @@ private fun InboxRow(
         ),
         border = BorderStroke(
             1.dp,
-            if (active) Primary.copy(alpha = 0.6f) else CardBorderSubtle,
+            if (active) Primary.copy(alpha = 0.6f) else if (inbox.isSuspected) Color(0xFFFDE68A) else CardBorderSubtle,
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (active) 2.dp else 0.5.dp),
     ) {
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(13.dp))
-                    .background(accent.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center,
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Icon(
-                    when {
-                        inbox.isBanned -> Icons.Rounded.Block
-                        inbox.isAmazon -> Icons.Rounded.ShoppingCart
-                        inbox.isOfficial -> Icons.Rounded.WorkspacePremium
-                        else -> Icons.Rounded.AlternateEmail
-                    },
-                    contentDescription = null,
-                    tint = when {
-                        inbox.isBanned -> BannedRed
-                        inbox.isAmazon -> Color(0xFFD97706)
-                        inbox.isOfficial -> OfficialGold
-                        else -> Color(0xFF0E9AA7)
-                    },
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(accent.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
                 ) {
+                    Icon(
+                        when {
+                            inbox.isConfirmedBanned -> Icons.Rounded.Block
+                            inbox.isSuspected -> Icons.Rounded.Warning
+                            inbox.isAmazon -> Icons.Rounded.ShoppingCart
+                            inbox.isOfficial -> Icons.Rounded.WorkspacePremium
+                            else -> Icons.Rounded.AlternateEmail
+                        },
+                        contentDescription = null,
+                        tint = when {
+                            inbox.isConfirmedBanned -> BannedRed
+                            inbox.isSuspected -> Color(0xFFD97706)
+                            inbox.isAmazon -> Color(0xFFD97706)
+                            inbox.isOfficial -> OfficialGold
+                            else -> Color(0xFF0E9AA7)
+                        },
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            inbox.personName.ifBlank { inbox.label.ifBlank { "حساب بريد" } },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (inbox.isConfirmedBanned) {
+                            Text(
+                                "⛔ ${inbox.banReason.ifBlank { "محظور" }}",
+                                color = BannedRed,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(BannedLight)
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                            )
+                        } else if (inbox.isSuspected) {
+                            Text(
+                                "⚠️ اشتباه حظر",
+                                color = Color(0xFF92400E),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFFEF3C7))
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                            )
+                        } else if (inbox.isAmazon) {
+                            Text(
+                                "🛒 أمازون",
+                                color = Color(0xFFC2410C),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(AmazonWarm)
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                            )
+                        } else if (inbox.isOfficial) {
+                            Text(
+                                "⭐ رسمي",
+                                color = Color(0xFFB45309),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(OfficialLight)
+                                    .padding(horizontal = 5.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        inbox.personName.ifBlank { inbox.label.ifBlank { "حساب بريد" } },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+                        inbox.email,
+                        color = Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (inbox.isBanned) {
-                        Text(
-                            "⛔ ${inbox.banReason.ifBlank { "محظور" }}",
-                            color = BannedRed,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(BannedLight)
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        )
-                    } else if (inbox.isAmazon) {
-                        Text(
-                            "🛒 أمازون",
-                            color = Color(0xFFC2410C),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(AmazonWarm)
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        )
-                    } else if (inbox.isOfficial) {
-                        Text(
-                            "⭐ رسمي",
-                            color = Color(0xFFB45309),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(OfficialLight)
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                        )
-                    }
                 }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    inbox.email,
-                    color = Muted,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (inbox.messageCount > 0) {
-                Text(
-                    arabicNumber(inbox.messageCount),
-                    color = Primary,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(PrimaryLight)
-                        .padding(horizontal = 7.dp, vertical = 3.dp),
-                )
-            }
-            IconButton(
-                onClick = onCopyEmail,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    Icons.Rounded.ContentCopy,
-                    contentDescription = "نسخ البريد",
-                    tint = Muted,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-            Box {
+                if (inbox.messageCount > 0) {
+                    Text(
+                        arabicNumber(inbox.messageCount),
+                        color = Primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(PrimaryLight)
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                    )
+                }
                 IconButton(
-                    onClick = { menuOpen = true },
+                    onClick = onCopyEmail,
                     modifier = Modifier.size(36.dp),
                 ) {
                     Icon(
-                        Icons.Rounded.MoreVert,
-                        contentDescription = "خيارات الصندوق",
+                        Icons.Rounded.ContentCopy,
+                        contentDescription = "نسخ البريد",
                         tint = Muted,
                         modifier = Modifier.size(18.dp),
                     )
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("نسخ البريد") },
-                        leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
-                        onClick = { menuOpen = false; onCopyEmail() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("حذف الصندوق", color = Danger) },
-                        leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = Danger) },
-                        onClick = { menuOpen = false; onDelete() },
-                    )
+                Box {
+                    IconButton(
+                        onClick = { menuOpen = true },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.MoreVert,
+                            contentDescription = "خيارات الصندوق",
+                            tint = Muted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("نسخ البريد") },
+                            leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
+                            onClick = { menuOpen = false; onCopyEmail() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("حذف الصندوق", color = Danger) },
+                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = Danger) },
+                            onClick = { menuOpen = false; onDelete() },
+                        )
+                    }
                 }
+            }
+            if (inbox.isSuspected && onConfirmBan != null && onMarkSafe != null) {
+                Spacer(Modifier.height(8.dp))
+                BanConfirmationBox(
+                    reason = inbox.banReason,
+                    onConfirmBan = onConfirmBan,
+                    onMarkSafe = onMarkSafe,
+                )
             }
         }
     }
@@ -710,8 +826,9 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
     val context = LocalContext.current
 
     val allAmazonInboxes = state.amazonInboxes
-    val bannedAmazonInboxes = allAmazonInboxes.filter { it.isBanned }
-    val healthyAmazonInboxes = allAmazonInboxes.filter { !it.isBanned }
+    val bannedAmazonInboxes = allAmazonInboxes.filter { it.isConfirmedBanned }
+    val suspectedAmazonInboxes = allAmazonInboxes.filter { it.isSuspected }
+    val healthyAmazonInboxes = allAmazonInboxes.filter { !it.isConfirmedBanned && !it.isSuspected }
     val amazonMessages = state.amazonMessages
 
     val query = state.search.trim()
@@ -724,6 +841,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
         item {
             AmazonUniverseHero(
                 totalAccounts = allAmazonInboxes.size,
+                suspectedAccounts = suspectedAmazonInboxes.size,
                 bannedAccounts = bannedAmazonInboxes.size,
                 messagesCount = amazonMessages.size,
             )
@@ -732,6 +850,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
         item {
             AmazonKpiSection(
                 total = allAmazonInboxes.size,
+                suspected = suspectedAmazonInboxes.size,
                 banned = bannedAmazonInboxes.size,
                 healthy = healthyAmazonInboxes.size,
                 messages = amazonMessages.size,
@@ -752,6 +871,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                     Text(
                         when (state.amazonTab) {
                             AmazonTab.ALL -> "جميع حسابات أمازون"
+                            AmazonTab.SUSPECTED -> "حسابات قيد المراجعة والاشتباه ⚠️"
                             AmazonTab.BANNED -> "الحسابات المقيدة والمحظورة ⛔"
                             AmazonTab.HEALTHY -> "الحسابات النشطة السليمة ✅"
                             AmazonTab.MESSAGES -> "رسائل وأكواد أمازون (OTP) 🔑"
@@ -765,6 +885,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
             MailPills(
                 listOf(
                     "الكل (${arabicNumber(allAmazonInboxes.size)})",
+                    "اشتباه ⚠️ (${arabicNumber(suspectedAmazonInboxes.size)})",
                     "محظورة ⛔ (${arabicNumber(bannedAmazonInboxes.size)})",
                     "سليمة ✅ (${arabicNumber(healthyAmazonInboxes.size)})",
                     "رسائل 🔑 (${arabicNumber(amazonMessages.size)})",
@@ -802,6 +923,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
         } else {
             val baseList = when (state.amazonTab) {
                 AmazonTab.ALL -> allAmazonInboxes
+                AmazonTab.SUSPECTED -> suspectedAmazonInboxes
                 AmazonTab.BANNED -> bannedAmazonInboxes
                 AmazonTab.HEALTHY -> healthyAmazonInboxes
                 AmazonTab.MESSAGES -> emptyList()
@@ -812,8 +934,16 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
             if (filteredInboxes.isEmpty()) {
                 item {
                     EmptyList(
-                        if (state.amazonTab == AmazonTab.BANNED) "لا توجد حسابات محظورة" else "لا توجد حسابات مطابقة",
-                        if (state.amazonTab == AmazonTab.BANNED) "ممتاز! لم يتم رصد أي قيود أو حظر على حسابات أمازون الحالية." else "جرّب البحث بكلمات أخرى أو اختر تبويبًا مختلفًا."
+                        when (state.amazonTab) {
+                            AmazonTab.SUSPECTED -> "لا توجد حسابات قيد المراجعة"
+                            AmazonTab.BANNED -> "لا توجد حسابات محظورة"
+                            else -> "لا توجد حسابات مطابقة"
+                        },
+                        when (state.amazonTab) {
+                            AmazonTab.SUSPECTED -> "رائع! لا يوجد أي حساب بانتظار التحقق من الحظر."
+                            AmazonTab.BANNED -> "ممتاز! لم يتم رصد أي قيود أو حظر مؤكد على حسابات أمازون."
+                            else -> "جرّب البحث بكلمات أخرى أو اختر تبويبًا مختلفًا."
+                        }
                     )
                 }
             } else {
@@ -828,6 +958,8 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                             viewModel.selectInbox(inbox)
                             viewModel.setSection(MainSection.MESSAGES)
                         },
+                        onConfirmBan = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "confirmed") } } else null,
+                        onMarkSafe = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "safe") } } else null,
                     )
                 }
             }
@@ -838,6 +970,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
 @Composable
 private fun AmazonUniverseHero(
     totalAccounts: Int,
+    suspectedAccounts: Int,
     bannedAccounts: Int,
     messagesCount: Int,
 ) {
@@ -937,12 +1070,18 @@ private fun AmazonUniverseHero(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     AmazonHeroStatPill(
                         label = "الحسابات",
                         value = arabicNumber(totalAccounts),
                         color = Color.White,
+                        modifier = Modifier.weight(1f),
+                    )
+                    AmazonHeroStatPill(
+                        label = "اشتباه ⚠️",
+                        value = arabicNumber(suspectedAccounts),
+                        color = if (suspectedAccounts > 0) Color(0xFFFBBF24) else Color(0xFF94A3B8),
                         modifier = Modifier.weight(1f),
                     )
                     AmazonHeroStatPill(
@@ -952,10 +1091,10 @@ private fun AmazonUniverseHero(
                         modifier = Modifier.weight(1f),
                     )
                     AmazonHeroStatPill(
-                        label = "الرسائل والأكواد",
+                        label = "الرسائل",
                         value = arabicNumber(messagesCount),
                         color = Color(0xFFFFB74D),
-                        modifier = Modifier.weight(1.2f),
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -974,12 +1113,12 @@ private fun AmazonHeroStatPill(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(Color.White.copy(alpha = 0.08f))
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+            .padding(horizontal = 6.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = value, color = color, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(text = label, color = Color(0xFF94A3B8), fontSize = 10.sp)
+            Text(text = value, color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(text = label, color = Color(0xFF94A3B8), fontSize = 9.sp)
         }
     }
 }
@@ -987,6 +1126,7 @@ private fun AmazonHeroStatPill(
 @Composable
 private fun AmazonKpiSection(
     total: Int,
+    suspected: Int,
     banned: Int,
     healthy: Int,
     messages: Int,
@@ -994,8 +1134,10 @@ private fun AmazonKpiSection(
     onSelectTab: (AmazonTab) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         AmazonKpiCard(
             title = "الكل",
@@ -1004,7 +1146,16 @@ private fun AmazonKpiSection(
             accentColor = Color(0xFFFF9900),
             selected = selectedTab == AmazonTab.ALL,
             onClick = { onSelectTab(AmazonTab.ALL) },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.width(76.dp),
+        )
+        AmazonKpiCard(
+            title = "اشتباه ⚠️",
+            count = arabicNumber(suspected),
+            icon = Icons.Rounded.Warning,
+            accentColor = Color(0xFFF59E0B),
+            selected = selectedTab == AmazonTab.SUSPECTED,
+            onClick = { onSelectTab(AmazonTab.SUSPECTED) },
+            modifier = Modifier.width(76.dp),
         )
         AmazonKpiCard(
             title = "المحظورة",
@@ -1013,7 +1164,7 @@ private fun AmazonKpiSection(
             accentColor = BannedRed,
             selected = selectedTab == AmazonTab.BANNED,
             onClick = { onSelectTab(AmazonTab.BANNED) },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.width(76.dp),
         )
         AmazonKpiCard(
             title = "السليمة",
@@ -1022,7 +1173,7 @@ private fun AmazonKpiSection(
             accentColor = Green,
             selected = selectedTab == AmazonTab.HEALTHY,
             onClick = { onSelectTab(AmazonTab.HEALTHY) },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.width(76.dp),
         )
         AmazonKpiCard(
             title = "الرسائل",
@@ -1031,7 +1182,7 @@ private fun AmazonKpiSection(
             accentColor = Color(0xFF6366F1),
             selected = selectedTab == AmazonTab.MESSAGES,
             onClick = { onSelectTab(AmazonTab.MESSAGES) },
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.width(76.dp),
         )
     }
 }
@@ -1094,12 +1245,21 @@ private fun AmazonAccountCard(
     inbox: Inbox,
     onCopyEmail: () -> Unit,
     onViewMessages: () -> Unit,
+    onConfirmBan: (() -> Unit)? = null,
+    onMarkSafe: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Surface),
-        border = BorderStroke(1.dp, if (inbox.isBanned) BannedRed.copy(alpha = 0.3f) else CardBorderSubtle),
+        border = BorderStroke(
+            1.dp,
+            when {
+                inbox.isConfirmedBanned -> BannedRed.copy(alpha = 0.3f)
+                inbox.isSuspected -> Color(0xFFFDE68A)
+                else -> CardBorderSubtle
+            }
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
     ) {
         Column(
@@ -1118,15 +1278,26 @@ private fun AmazonAccountCard(
                         .size(44.dp)
                         .clip(RoundedCornerShape(13.dp))
                         .background(
-                            if (inbox.isBanned) BannedLight
-                            else Color(0xFFFF9900).copy(alpha = 0.12f)
+                            when {
+                                inbox.isConfirmedBanned -> BannedLight
+                                inbox.isSuspected -> Color(0xFFFEF3C7)
+                                else -> Color(0xFFFF9900).copy(alpha = 0.12f)
+                            }
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        if (inbox.isBanned) Icons.Rounded.Block else Icons.Rounded.ShoppingCart,
+                        when {
+                            inbox.isConfirmedBanned -> Icons.Rounded.Block
+                            inbox.isSuspected -> Icons.Rounded.Warning
+                            else -> Icons.Rounded.ShoppingCart
+                        },
                         contentDescription = null,
-                        tint = if (inbox.isBanned) BannedRed else Color(0xFFFF9900),
+                        tint = when {
+                            inbox.isConfirmedBanned -> BannedRed
+                            inbox.isSuspected -> Color(0xFFD97706)
+                            else -> Color(0xFFFF9900)
+                        },
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -1171,7 +1342,7 @@ private fun AmazonAccountCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (inbox.isBanned) {
+                if (inbox.isConfirmedBanned) {
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -1184,6 +1355,23 @@ private fun AmazonAccountCard(
                         Text(
                             text = inbox.banReason.ifBlank { "مقتصر على المشتريات الرقمية" },
                             color = BannedRed,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                } else if (inbox.isSuspected) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFEF3C7))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(Icons.Rounded.Warning, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(12.dp))
+                        Text(
+                            text = "⚠️ اشتباه حظر",
+                            color = Color(0xFF92400E),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                         )
@@ -1211,6 +1399,15 @@ private fun AmazonAccountCard(
                     text = "${arabicNumber(inbox.messageCount)} رسائل",
                     color = Muted,
                     fontSize = 11.sp,
+                )
+            }
+
+            // Interactive confirmation prompt if suspected
+            if (inbox.isSuspected && onConfirmBan != null && onMarkSafe != null) {
+                BanConfirmationBox(
+                    reason = inbox.banReason,
+                    onConfirmBan = onConfirmBan,
+                    onMarkSafe = onMarkSafe,
                 )
             }
 

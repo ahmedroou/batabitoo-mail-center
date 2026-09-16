@@ -172,9 +172,21 @@ class MailJsonTest {
             subject = "تم إلغاء طلبك لأن حسابك يقتصر على المشتريات الرقمية فقط",
             text = "المشتريات الرقمية فقط"
         )
-        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(officialInbox, listOf(banMsg)))
+        // New interactive requirement: Ban is suspected until confirmed by user
+        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isSuspectedInbox(officialInbox, listOf(banMsg)))
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(officialInbox, listOf(banMsg)))
 
-        // Temp inboxes should NOT be classified as banned official
+        // When confirmed by user -> isBannedInbox is true
+        val confirmedInbox = officialInbox.copy(banStatus = "confirmed")
+        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(confirmedInbox))
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isSuspectedInbox(confirmedInbox))
+
+        // When marked safe by user -> isSuspected and isBanned are false
+        val safeInbox = officialInbox.copy(banStatus = "safe")
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(safeInbox, listOf(banMsg)))
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isSuspectedInbox(safeInbox, listOf(banMsg)))
+
+        // Temp inboxes should NOT be classified as banned or suspected official
         val tempInbox = Inbox(
             id = "t_ban_1",
             email = "temp123@getnada.com",
@@ -182,6 +194,7 @@ class MailJsonTest {
             type = "temp"
         )
         assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(tempInbox, listOf(banMsg)))
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isSuspectedInbox(tempInbox, listOf(banMsg)))
 
         // Pre-classified banned inbox -> fast path true
         val preBanned = Inbox(
@@ -196,16 +209,19 @@ class MailJsonTest {
 
     @Test
     fun parsesBannedFieldsFromApiJson() {
-        val statusJson = """{"status":"online","cloudConnected":true,"projectId":"mail","counts":{"totalInboxes":10,"official":4,"temp":6,"amazon":3,"banned":2,"messages":15}}"""
+        val statusJson = """{"status":"online","cloudConnected":true,"projectId":"mail","counts":{"totalInboxes":10,"official":4,"temp":6,"amazon":3,"banned":2,"suspected":1,"messages":15}}"""
         val status = MailJson.status(statusJson)
         assertEquals(2, status.counts.banned)
+        assertEquals(1, status.counts.suspected)
         assertEquals(3, status.counts.amazon)
 
-        val inboxesJson = """{"activeId":"o1","official":[],"temp":[],"amazon":[],"banned":[{"id":"o_b1","email":"banned@batabitoo.com","isBanned":true,"banReason":"مشتريات رقمية فقط","isAmazon":true,"isOfficial":true}]}"""
+        val inboxesJson = """{"activeId":"o1","official":[],"temp":[],"amazon":[],"banned":[{"id":"o_b1","email":"banned@batabitoo.com","isBanned":true,"banReason":"مشتريات رقمية فقط","isAmazon":true,"isOfficial":true}],"suspected":[{"id":"o_s1","email":"suspect@batabitoo.com","banStatus":"suspected","isAmazon":true,"isOfficial":true}]}"""
         val payload = MailJson.inboxes(inboxesJson)
         assertEquals(1, payload.banned.size)
         assertTrue(payload.banned[0].isBanned)
         assertEquals("مشتريات رقمية فقط", payload.banned[0].banReason)
+        assertEquals(1, payload.suspected.size)
+        assertTrue(payload.suspected[0].isSuspected)
 
         val msgJson = """{"id":"mb1","from":"ofm@amazon.sa","subject":"مشتريات رقمية فقط","isBanned":true,"banReason":"مشتريات رقمية فقط","isAmazon":true}"""
         val msg = MailJson.message(msgJson)
@@ -251,10 +267,15 @@ class MailJsonTest {
             text = "يقتصر على المشتريات الرقمية فقط بسبب ناجم عن انتهاكات متعددة لسياسة المرتجعات"
         )
         val allMsgs = listOf(otpMsg, banMsg)
-        // The detector immediately upgrades it to Banned!
+        // The detector marks it as Amazon, and flags it as Suspected Ban (not yet confirmed)
         assertTrue(com.batabitoo.mailcenter.data.AmazonDetector.isAmazonInbox(inbox, allMsgs))
-        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(inbox, allMsgs))
+        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isSuspectedInbox(inbox, allMsgs))
+        assertFalse(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(inbox, allMsgs))
         assertEquals("مشتريات رقمية فقط", com.batabitoo.mailcenter.data.AmazonBannedDetector.getBanReason(banMsg))
+
+        // Stage 4: User confirms the ban
+        val confirmedInbox = inbox.copy(banStatus = "confirmed")
+        assertTrue(com.batabitoo.mailcenter.data.AmazonBannedDetector.isBannedInbox(confirmedInbox, allMsgs))
     }
 
     @Test

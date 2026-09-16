@@ -192,6 +192,46 @@ svg {
   background: var(--danger);
 }
 
+.amazon-hub-pill {
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
+  border: 1px solid #fed7aa;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: var(--shadow-xs);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.amazon-hub-pill:hover {
+  background: linear-gradient(135deg, #ffedd5, #fed7aa);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(234, 88, 12, 0.18);
+}
+
+.amazon-hub-pill .hub-icon {
+  font-size: 14px;
+}
+
+.amazon-hub-pill b {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #ea580c;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .icon-button {
   width: 38px;
   height: 38px;
@@ -256,6 +296,15 @@ svg {
   border: 1px solid var(--line);
   box-shadow: var(--shadow-xs);
   transition: transform 0.2s ease;
+}
+
+.stat-card.stat-clickable {
+  cursor: pointer;
+}
+
+.stat-card.stat-clickable:hover {
+  border-color: #fdba74;
+  background: #fffdfb;
 }
 
 .stat-card:hover {
@@ -482,6 +531,89 @@ svg {
   color: #b91c1c;
   font-size: 10px;
   font-weight: 800;
+}
+
+.suspected-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.inbox-item.is-suspected {
+  background: rgba(254, 243, 199, 0.4);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.inbox-item.is-suspected:hover {
+  background: rgba(254, 243, 199, 0.7);
+}
+
+.ban-confirm-inline {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px dashed #f59e0b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ban-confirm-q {
+  font-size: 11px;
+  font-weight: 800;
+  color: #92400e;
+  line-height: 1.3;
+}
+
+.ban-confirm-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn-confirm-ban {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+  line-height: 1.3;
+  border: none;
+}
+
+.btn-confirm-ban:hover {
+  background: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.btn-mark-safe {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #059669;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+  line-height: 1.3;
+  border: none;
+}
+
+.btn-mark-safe:hover {
+  background: #047857;
+  transform: translateY(-1px);
 }
 
 /* Search Box */
@@ -1067,6 +1199,13 @@ svg {
   transform: scale(1.04);
 }
 
+.otp-chip.highlight {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #15803d;
+  box-shadow: 0 2px 6px rgba(22, 163, 74, 0.12);
+}
+
 .otp-chip span {
   font-size: 8px;
   font-weight: 800;
@@ -1078,6 +1217,63 @@ svg {
   font-weight: 900;
   letter-spacing: 1.5px;
   direction: ltr;
+}
+
+.amazon-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #ffedd5;
+  color: #c2410c;
+  font-size: 10px;
+  font-weight: 800;
+  border: 1px solid #fed7aa;
+}
+
+.banned-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 800;
+  border: 1px solid #fecaca;
+}
+
+.order-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: #f0f9ff;
+  color: #0369a1;
+  font-size: 10px;
+  font-weight: 800;
+  border: 1px solid #bae6fd;
+}
+
+.message-card.is-banned-card {
+  border-color: #fecaca;
+  background: #fffafa;
+}
+
+.message-card.is-banned-card:hover {
+  background: #fef2f2;
+}
+
+.message-card.is-suspected-card {
+  border-color: #fde68a;
+  background: #fffdf5;
+}
+
+.message-card.is-suspected-card:hover {
+  background: #fef3c7;
 }
 
 .message-arrow {
@@ -1151,6 +1347,285 @@ svg {
   font-size: 12px;
   color: var(--muted);
   margin-top: 4px;
+}
+
+/* =============================================================
+   Dedicated Amazon Hub Shell (Full Suite for Amazon Accounts & OTPs)
+   ============================================================= */
+.amazon-hub-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.amazon-hub-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 20px;
+  padding: 24px 28px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 60%, #1e1b4b 100%);
+  color: #ffffff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+  position: relative;
+  overflow: hidden;
+}
+
+.amazon-hub-hero::before {
+  content: "";
+  position: absolute;
+  top: -40%;
+  right: -20%;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(234, 88, 12, 0.25), transparent 70%);
+  pointer-events: none;
+}
+
+.amazon-brand-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(234, 88, 12, 0.2);
+  border: 1px solid rgba(234, 88, 12, 0.4);
+  color: #fb923c;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.amazon-hero-main h2 {
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffffff;
+  margin: 0 0 8px;
+  line-height: 1.3;
+}
+
+.amazon-hero-main p {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0 0 18px;
+  max-width: 520px;
+}
+
+.amazon-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.amazon-create-btn {
+  background: linear-gradient(135deg, #f97316, #ea580c) !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 18px rgba(234, 88, 12, 0.35) !important;
+  font-weight: 800;
+  height: 40px;
+  padding: 0 18px;
+}
+
+.amazon-create-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(234, 88, 12, 0.45) !important;
+}
+
+.amazon-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  align-self: center;
+}
+
+.amazon-stat-tile {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  backdrop-filter: blur(10px);
+}
+
+.amazon-stat-tile span {
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.amazon-stat-tile strong {
+  font-size: 22px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.amazon-stat-tile.highlight-gold strong {
+  color: #fbbf24;
+}
+
+.amazon-stat-tile.highlight-amber strong {
+  color: #f59e0b;
+}
+
+.amazon-stat-tile.highlight-red strong {
+  color: #f87171;
+}
+
+.amazon-feed-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.amazon-filters-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.amazon-sub-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.amazon-sub-tabs button {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.amazon-sub-tabs button:hover {
+  background: var(--line-light);
+  color: var(--ink);
+}
+
+.amazon-sub-tabs button.active {
+  background: #ea580c;
+  border-color: #ea580c;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(234, 88, 12, 0.25);
+}
+
+.amazon-sub-tabs button b {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 10px;
+}
+
+.amazon-sub-tabs button.active b {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.amazon-inboxes-reel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 2px 8px;
+  border-bottom: 1px solid var(--line-light);
+}
+
+.amazon-reel-item {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.amazon-reel-item:hover {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #c2410c;
+}
+
+.amazon-reel-item.active {
+  background: #ffedd5;
+  border-color: #ea580c;
+  color: #9a3412;
+  font-weight: 800;
+}
+
+.amazon-reel-item.is-suspected {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.amazon-reel-item.is-banned {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.amazon-reel-item .reel-count {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  font-size: 10px;
+}
+
+.amazon-reel-add {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: #f0fdf4;
+  border: 1px dashed #86efac;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.amazon-reel-add:hover {
+  background: #dcfce7;
+  border-color: #4ade80;
 }
 
 /* =============================================================
@@ -1792,6 +2267,39 @@ svg {
     min-height: 460px;
   }
 
+  /* Amazon Hub Mobile Adaptation */
+  .amazon-hub-hero {
+    grid-template-columns: 1fr;
+    padding: 16px 18px;
+    gap: 16px;
+  }
+
+  .amazon-hero-main h2 {
+    font-size: 18px;
+  }
+
+  .amazon-create-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .amazon-hero-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .amazon-stat-tile {
+    padding: 10px 12px;
+  }
+
+  .amazon-stat-tile strong {
+    font-size: 18px;
+  }
+
+  .amazon-feed-container {
+    padding: 12px;
+  }
+
   /* Active Inbox Bar Mobile */
   .active-inbox-bar {
     min-height: 140px;
@@ -1842,7 +2350,7 @@ svg {
     text-align: right;
   }
 
-  /* Mobile Bottom Navigation */
+  /* Mobile Bottom Navigation (5 columns: inboxes, amazon, create, messages, logs) */
   .mobile-nav {
     position: fixed;
     z-index: 90;
@@ -1855,7 +2363,7 @@ svg {
     backdrop-filter: blur(16px);
     border-top: 1px solid var(--line);
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     align-items: center;
     box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.05);
   }

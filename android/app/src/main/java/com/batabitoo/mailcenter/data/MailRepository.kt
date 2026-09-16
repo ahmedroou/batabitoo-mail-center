@@ -120,6 +120,15 @@ class MailRepository(context: Context) {
         storageStats()
     }
 
+    suspend fun setBanStatus(id: String, status: String, reason: String = ""): String = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply {
+            put("id", id)
+            put("banStatus", status)
+            if (reason.isNotBlank()) put("reason", reason)
+        }
+        request("/api/inbox/ban-status", "POST", body.toString())
+    }
+
     private fun fetchCached(key: String, path: String): String {
         return try {
             val value = request(path)

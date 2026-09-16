@@ -9,6 +9,7 @@ data class Counts(
     val temp: Int = 0,
     val amazon: Int = 0,
     val banned: Int = 0,
+    val suspected: Int = 0,
     val messages: Int = 0,
 )
 
@@ -51,11 +52,15 @@ data class Inbox(
     val isOfficial: Boolean = false,
     val isAmazon: Boolean = false,
     val isBanned: Boolean = false,
+    val banStatus: String = "none",
     val banReason: String = "",
     val type: String = "temp",
     val messageCount: Int = 0,
     val createdAt: String = "",
-)
+) {
+    val isConfirmedBanned: Boolean get() = banStatus == "confirmed" || isBanned
+    val isSuspected: Boolean get() = banStatus == "suspected"
+}
 
 data class MailMessage(
     val id: String,
@@ -94,6 +99,7 @@ data class InboxesPayload(
     val temp: List<Inbox>,
     val amazon: List<Inbox> = emptyList(),
     val banned: List<Inbox> = emptyList(),
+    val suspected: List<Inbox> = emptyList(),
 )
 
 data class CurrentPayload(val inbox: Inbox?, val messages: List<MailMessage>)
@@ -103,6 +109,7 @@ data class MessagesPayload(
     val tempCount: Int,
     val amazonCount: Int = 0,
     val bannedCount: Int = 0,
+    val suspectedCount: Int = 0,
 )
 
 object AmazonDetector {
@@ -142,56 +149,61 @@ object AmazonDetector {
 }
 
 object AmazonBannedDetector {
-    private val SENDER_KEYWORDS = listOf(
-        "ofm@amazon", "cis@amazon", "buyer-returns@amazon",
-        "account-alert@amazon", "buyer-investigations@amazon",
-        "الموظف المختص بالأمور المتعلقة بالحساب", "account specialist"
-    )
     private val DIGITAL_RESTRICTIONS = listOf(
-        "المشتريات الرقمية", "مشتريات رقمية", "digital purchases only",
-        "digital orders only", "غير الرقمية", "سياسة المرتجعات ورد الأموال",
-        "انتهاكات متعددة لسياسة المرتجعات"
+        "المشتريات الرقمية فقط", "يقتصر على المشتريات الرقمية", "قصرنا حسابك على المشتريات الرقمية",
+        "مشتريات رقمية فقط", "digital purchases only", "digital orders only",
+        "غير الرقمية", "انتهاكات متعددة لسياسة المرتجعات", "انتهاكات متكررة لشروط الاستخدام"
     )
     private val ACCOUNT_CLOSURE = listOf(
         "أغلقنا هذا الحساب", "اغلقنا هذا الحساب", "تم إغلاق حسابك",
         "تم اغلاق حسابك", "تم حظر حسابك", "تم تعليق حسابك",
+        "حسابك معلق", "حسابك محظور", "حسابك مغلق",
         "إنهاء الحسابات", "انهاء الحسابات", "رفض الخدمة",
         "إنهاء استخدام خدمات أمازون", "انهاء استخدام خدمات امازون",
         "closed this account", "account has been closed", "account closure",
         "terminate your account", "terminated your account",
-        "refuse service, terminate accounts", "account on hold",
-        "account suspended", "account locked"
+        "refuse service, terminate accounts"
     )
 
     fun isBannedMessage(message: MailMessage): Boolean {
         if (message.isBanned) return true
-        val text = "${message.from} ${message.to} ${message.subject} ${message.intro} ${message.text} ${message.inboxEmail}".lowercase()
-        return SENDER_KEYWORDS.any { text.contains(it) } ||
-               DIGITAL_RESTRICTIONS.any { text.contains(it) } ||
-               ACCOUNT_CLOSURE.any { text.contains(it) }
+        val text = "${message.subject} ${message.intro} ${message.text}".lowercase()
+        val hasSuspended = Regex("""account (?:is|was|has been)?\s*(?:suspended|locked|on hold|closed)""", RegexOption.IGNORE_CASE).containsMatchIn(text)
+        return DIGITAL_RESTRICTIONS.any { text.contains(it) } ||
+               ACCOUNT_CLOSURE.any { text.contains(it) } ||
+               hasSuspended
     }
 
     fun getBanReason(message: MailMessage): String {
         if (message.banReason.isNotBlank()) return message.banReason
         if (!isBannedMessage(message)) return ""
-        val text = "${message.from} ${message.subject} ${message.intro} ${message.text}".lowercase()
+        val text = "${message.subject} ${message.intro} ${message.text}".lowercase()
         return when {
             DIGITAL_RESTRICTIONS.any { text.contains(it) } -> "مشتريات رقمية فقط"
-            ACCOUNT_CLOSURE.any { text.contains(it) } -> "إغلاق وحظر الحساب"
-            SENDER_KEYWORDS.any { text.contains(it) } -> "مراجعة أمنية / OFM"
+            ACCOUNT_CLOSURE.any { text.contains(it) } || text.contains("suspended") || text.contains("locked") -> "إغلاق وحظر الحساب"
             else -> "حساب مقيد / محظور"
         }
     }
 
-    fun isBannedInbox(inbox: Inbox, messages: List<MailMessage> = emptyList()): Boolean {
+    fun isConfirmedBanned(inbox: Inbox): Boolean {
         if (!AmazonDetector.isOfficialInbox(inbox)) return false
-        if (inbox.isBanned) return true
-        val meta = "${inbox.email} ${inbox.label} ${inbox.personName}".lowercase()
-        if (listOf("محظور", "مقيد", "banned", "restricted", "suspended").any { meta.contains(it) }) return true
+        return inbox.banStatus == "confirmed" || inbox.isBanned
+    }
+
+    fun isSuspectedInbox(inbox: Inbox, messages: List<MailMessage> = emptyList()): Boolean {
+        if (!AmazonDetector.isOfficialInbox(inbox)) return false
+        if (inbox.banStatus == "safe") return false
+        if (inbox.banStatus == "confirmed" || inbox.isBanned) return false
+        if (inbox.banStatus == "suspected") return true
+
         val inboxEmail = inbox.email.lowercase().trim()
         return messages.any { m ->
             (m.inboxEmail.lowercase().trim() == inboxEmail || m.to.lowercase().contains(inboxEmail)) && isBannedMessage(m)
         }
+    }
+
+    fun isBannedInbox(inbox: Inbox, messages: List<MailMessage> = emptyList()): Boolean {
+        return isConfirmedBanned(inbox)
     }
 }
 
@@ -328,6 +340,7 @@ object MailJson {
                 temp = counts.optInt("temp"),
                 amazon = counts.optInt("amazon"),
                 banned = counts.optInt("banned"),
+                suspected = counts.optInt("suspected"),
                 messages = counts.optInt("messages"),
             ),
             appVersion = appVersionInfo,
@@ -386,6 +399,7 @@ object MailJson {
             temp = root.optJSONArray("temp").toObjects(::inbox),
             amazon = root.optJSONArray("amazon").toObjects(::inbox),
             banned = root.optJSONArray("banned").toObjects(::inbox),
+            suspected = root.optJSONArray("suspected").toObjects(::inbox),
         )
     }
 
@@ -406,6 +420,7 @@ object MailJson {
             tempCount = counts.optInt("temp"),
             amazonCount = counts.optInt("amazon"),
             bannedCount = counts.optInt("banned"),
+            suspectedCount = counts.optInt("suspected"),
         )
     }
 
@@ -445,10 +460,10 @@ object MailJson {
         val label = item.optString("label")
         val personName = item.optString("personName")
         val official = item.optBoolean("isOfficial") || item.optString("type") == "official" || email.endsWith("@batabitoo.com", true)
-        val isBanned = official && (item.optBoolean("isBanned") || listOf(email, label, personName).any {
-            it.lowercase().contains("banned") || it.contains("محظور") || it.contains("مقيد")
-        })
-        val isAmazon = official && (isBanned || item.optBoolean("isAmazon") || listOf(email, label, personName).any {
+        val banStatus = item.optString("banStatus", if (item.optBoolean("isBanned")) "confirmed" else "none")
+        val isConfirmedBanned = official && (banStatus == "confirmed" || item.optBoolean("isBanned"))
+        val isSuspected = official && (banStatus == "suspected")
+        val isAmazon = official && (isConfirmedBanned || isSuspected || item.optBoolean("isAmazon") || listOf(email, label, personName).any {
             it.lowercase().contains("amazon") || it.contains("أمازون") || it.contains("امازون") || it.contains("إمازون")
         })
         val banReason = item.optString("banReason")
@@ -461,7 +476,8 @@ object MailJson {
             personName = personName,
             isOfficial = official,
             isAmazon = isAmazon,
-            isBanned = isBanned,
+            isBanned = isConfirmedBanned,
+            banStatus = banStatus,
             banReason = banReason,
             type = if (official) "official" else "temp",
             messageCount = item.optInt("messageCount"),

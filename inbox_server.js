@@ -116,6 +116,7 @@ const server = http.createServer(async (req, res) => {
       const temp = db.getTempInboxes();
       const amazon = db.getAmazonInboxes();
       const banned = db.getBannedInboxes();
+      const suspected = db.getSuspectedInboxes();
       const messages = db.getAllMessages();
       const amazonMsgs = db.getAmazonMessages();
       const bannedMsgs = db.getBannedMessages();
@@ -131,6 +132,7 @@ const server = http.createServer(async (req, res) => {
           temp: temp.length,
           amazon: amazon.length,
           banned: banned.length,
+          suspected: suspected.length,
           messages: messages.length,
           amazonMessages: amazonMsgs.length,
           bannedMessages: bannedMsgs.length
@@ -260,11 +262,12 @@ const server = http.createServer(async (req, res) => {
     // 3. GET /api/inboxes — List inboxes with Separation & Counts
     // ============================================================
     if (url.pathname === '/api/inboxes' && req.method === 'GET') {
-      const filterType = url.searchParams.get('type'); // 'official' | 'temp' | 'amazon' | 'banned'
+      const filterType = url.searchParams.get('type'); // 'official' | 'temp' | 'amazon' | 'banned' | 'suspected'
       const official = db.getOfficialInboxes();
       const temp = db.getTempInboxes();
       const amazon = db.getAmazonInboxes();
       const banned = db.getBannedInboxes();
+      const suspected = db.getSuspectedInboxes();
       const all = db.getAllInboxes();
       const active = db.getActiveInbox();
 
@@ -273,6 +276,7 @@ const server = http.createServer(async (req, res) => {
       else if (filterType === 'temp') returnedInboxes = temp;
       else if (filterType === 'amazon') returnedInboxes = amazon;
       else if (filterType === 'banned') returnedInboxes = banned;
+      else if (filterType === 'suspected') returnedInboxes = suspected;
 
       return sendJSON(200, {
         activeId: active ? active.id : null,
@@ -281,14 +285,28 @@ const server = http.createServer(async (req, res) => {
           official: official.length,
           temp: temp.length,
           amazon: amazon.length,
-          banned: banned.length
+          banned: banned.length,
+          suspected: suspected.length
         },
         official: official,
         temp: temp,
         amazon: amazon,
         banned: banned,
+        suspected: suspected,
         inboxes: returnedInboxes
       });
+    }
+
+    // ============================================================
+    // POST /api/inbox/ban-status — User confirm / dismiss ban
+    // ============================================================
+    if (url.pathname === '/api/inbox/ban-status' && req.method === 'POST') {
+      const payload = await parseBody();
+      const { id, banStatus, reason } = payload;
+      if (!id || !banStatus) return sendJSON(400, { error: 'Missing inbox id or banStatus' });
+      const updated = await db.setInboxBanStatus(id, banStatus, reason);
+      if (!updated) return sendJSON(404, { error: 'Inbox not found' });
+      return sendJSON(200, { success: true, inbox: updated });
     }
 
     // ============================================================

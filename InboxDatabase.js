@@ -158,42 +158,35 @@ class InboxDatabase {
     return /amazon|أمازون|امازون|إمازون|amazon\.sa|amazon\.com|amazon\.ae|amazon\.co\.uk|amazon\.de|ofm@|cis@/i.test(textToCheck);
   }
 
-  // Banned / Restricted Amazon Accounts Detection
+  // Banned / Restricted Amazon Accounts Detection (Strict Content-based, NEVER sender-only)
   isBannedMessage(msg) {
     if (!msg) return false;
     if (msg.isBanned === true) return true;
+
+    // Normal notifications with OTP are verification codes, not account closures
     const textToCheck = [
-      msg.from,
-      msg.to,
       msg.subject,
       msg.intro,
-      msg.text,
-      msg.inboxEmail
+      msg.text
     ].filter(Boolean).join(' ').toLowerCase();
 
-    // 1. Specialized Senders (OFM, CIS, Buyer Returns)
-    const hasBannedSender = /ofm@amazon|cis@amazon|buyer-returns@amazon|account-alert@amazon|buyer-investigations@amazon|الموظف المختص بالأمور المتعلقة بالحساب|account specialist/i.test(textToCheck);
+    // 1. Digital purchases only restriction phrases
+    const hasDigitalRestriction = /المشتريات الرقمية فقط|يقتصر على المشتريات الرقمية|قصرنا حسابك على المشتريات الرقمية|مشتريات رقمية فقط|digital purchases only|digital orders only|غير الرقمية|انتهاكات متعددة لسياسة المرتجعات|انتهاكات متكررة لشروط الاستخدام/i.test(textToCheck);
 
-    // 2. Digital purchases only restriction phrases
-    const hasDigitalRestriction = /المشتريات الرقمية|مشتريات رقمية|digital purchases only|digital orders only|غير الرقمية|سياسة المرتجعات ورد الأموال|انتهاكات متعددة لسياسة المرتجعات/i.test(textToCheck);
+    // 2. Account closure / termination / ban phrases
+    const hasAccountClosure = /أغلقنا هذا الحساب|اغلقنا هذا الحساب|تم إغلاق حسابك|تم اغلاق حسابك|تم حظر حسابك|تم تعليق حسابك|حسابك (?:معلق|محظور|مغلق)|إنهاء الحسابات|انهاء الحسابات|رفض الخدمة|إنهاء استخدام خدمات أمازون|انهاء استخدام خدمات امازون|closed this account|account has been closed|account closure|terminate your account|terminated your account|refuse service, terminate accounts|account (?:is|was|has been)?\s*(?:suspended|locked|on hold|closed)/i.test(textToCheck);
 
-    // 3. Account closure / termination / ban phrases
-    const hasAccountClosure = /أغلقنا هذا الحساب|اغلقنا هذا الحساب|تم إغلاق حسابك|تم اغلاق حسابك|تم حظر حسابك|تم تعليق حسابك|إنهاء الحسابات|انهاء الحسابات|رفض الخدمة|إنهاء استخدام خدمات أمازون|انهاء استخدام خدمات امازون|closed this account|account has been closed|account closure|terminate your account|terminated your account|refuse service, terminate accounts|account on hold|account suspended|account locked/i.test(textToCheck);
-
-    return hasBannedSender || hasDigitalRestriction || hasAccountClosure;
+    return hasDigitalRestriction || hasAccountClosure;
   }
 
   getBanReason(msg) {
-    if (!msg) return "حساب محظور / مقيد";
-    const textToCheck = [msg.from, msg.subject, msg.intro, msg.text].filter(Boolean).join(' ').toLowerCase();
+    if (!msg) return "حساب مقيد / محظور";
+    const textToCheck = [msg.subject, msg.intro, msg.text].filter(Boolean).join(' ').toLowerCase();
     if (/المشتريات الرقمية|مشتريات رقمية|digital purchases/i.test(textToCheck)) {
       return "مشتريات رقمية فقط";
     }
     if (/أغلقنا هذا الحساب|تم إغلاق|closed this account|إنهاء الحسابات|terminate/i.test(textToCheck)) {
       return "إغلاق وحظر الحساب";
-    }
-    if (/ofm@|الموظف المختص|account specialist/i.test(textToCheck)) {
-      return "مراجعة أمنية / OFM";
     }
     return "حساب مقيد / محظور";
   }
@@ -203,8 +196,8 @@ class InboxDatabase {
     // Strictly Official inboxes only!
     if (!this.isOfficialInbox(inbox)) return false;
 
-    // O(1) Fast path: if already classified as Amazon or Banned, skip re-evaluating messages
-    if (inbox.isAmazon === true || inbox.isBanned === true) return true;
+    // Fast path: if already classified as Amazon or Banned, return true
+    if (inbox.isAmazon === true || inbox.isBanned === true || inbox.banStatus === 'confirmed' || inbox.banStatus === 'suspected') return true;
 
     // Check metadata for unclassified official inboxes
     const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
@@ -216,25 +209,27 @@ class InboxDatabase {
     return messages.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && this.isAmazonMessage(m));
   }
 
-  isBannedInbox(inbox, allMessages = null) {
+  isBannedInbox(inbox) {
     if (!inbox) return false;
-    // Strictly Official inboxes only!
     if (!this.isOfficialInbox(inbox)) return false;
+    // An inbox is strictly considered banned ONLY if confirmed by user or explicitly marked
+    return inbox.banStatus === 'confirmed' || inbox.isBanned === true;
+  }
 
-    // O(1) Fast path: if already classified as Banned, return true immediately
-    if (inbox.isBanned === true) return true;
+  isSuspectedInbox(inbox, allMessages = null) {
+    if (!inbox) return false;
+    if (!this.isOfficialInbox(inbox)) return false;
+    if (inbox.banStatus === 'safe') return false; // User confirmed healthy
+    if (inbox.banStatus === 'confirmed' || inbox.isBanned === true) return false; // Already confirmed banned
+    if (inbox.banStatus === 'suspected') return true;
 
-    // Check metadata
-    const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
-    if (/محظور|مقيد|banned|restricted|suspended/i.test(meta)) return true;
-
-    // Check incoming messages for this official inbox
+    // Check if any message contains genuine ban restriction phrases
     const messages = allMessages || this.getAllMessages();
     const inboxEmail = String(inbox.email || '').toLowerCase().trim();
     return messages.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && this.isBannedMessage(m));
   }
 
-  // Periodic incremental scan: checks only UNCLASSIFIED OFFICIAL inboxes
+  // Periodic incremental scan: classifies Amazon and detects Suspected bans
   async scanAndClassifyAmazonInboxes() {
     const data = this.readLocal();
     const inboxes = data.inboxes || [];
@@ -247,17 +242,21 @@ class InboxDatabase {
       if (!this.isOfficialInbox(inbox)) continue;
 
       let changed = false;
-      // Check Banned first
-      if (!inbox.isBanned && this.isBannedInbox(inbox, messages)) {
-        inbox.isBanned = true;
+      // Suspected Ban detection (does NOT automatically confirm ban!)
+      if (inbox.banStatus !== 'safe' && inbox.banStatus !== 'confirmed' && !inbox.isBanned) {
+        if (this.isSuspectedInbox(inbox, messages)) {
+          inbox.banStatus = 'suspected';
+          inbox.isAmazon = true;
+          const matchingMsg = messages.find(m => String(m.inboxEmail || '').toLowerCase().trim() === String(inbox.email || '').toLowerCase().trim() && this.isBannedMessage(m));
+          inbox.banReason = this.getBanReason(matchingMsg);
+          inbox.bannedDetectedAt = inbox.bannedDetectedAt || new Date().toISOString();
+          changed = true;
+        }
+      }
+
+      if (!inbox.isAmazon && this.isAmazonInbox(inbox, messages)) {
         inbox.isAmazon = true;
-        const matchingMsg = messages.find(m => String(m.inboxEmail || '').toLowerCase().trim() === String(inbox.email || '').toLowerCase().trim() && this.isBannedMessage(m));
-        inbox.banReason = this.getBanReason(matchingMsg);
-        inbox.bannedDetectedAt = new Date().toISOString();
-        changed = true;
-      } else if (!inbox.isAmazon && this.isAmazonInbox(inbox, messages)) {
-        inbox.isAmazon = true;
-        inbox.amazonDetectedAt = new Date().toISOString();
+        inbox.amazonDetectedAt = inbox.amazonDetectedAt || new Date().toISOString();
         changed = true;
       }
 
@@ -276,7 +275,8 @@ class InboxDatabase {
             const inboxRef = this.db.collection('inboxes').doc(inbox.id);
             batch.set(inboxRef, sanitizeForFirestore({
               isAmazon: inbox.isAmazon,
-              isBanned: inbox.isBanned,
+              isBanned: inbox.isBanned === true,
+              banStatus: inbox.banStatus || 'none',
               banReason: inbox.banReason || null,
               bannedDetectedAt: inbox.bannedDetectedAt || null,
               amazonDetectedAt: inbox.amazonDetectedAt || null
@@ -303,11 +303,49 @@ class InboxDatabase {
 
   getBannedInboxes() {
     const official = this.getOfficialInboxes();
+    return official.filter(i => i.isBanned === true || i.banStatus === 'confirmed');
+  }
+
+  getSuspectedInboxes() {
+    const official = this.getOfficialInboxes();
     const messages = this.getAllMessages();
-    return official.filter(i => {
-      if (i.isBanned === true) return true;
-      return this.isBannedInbox(i, messages);
-    });
+    return official.filter(i => this.isSuspectedInbox(i, messages));
+  }
+
+  async setInboxBanStatus(inboxId, status, reason = '') {
+    const data = this.readLocal();
+    const inbox = (data.inboxes || []).find(i => i.id === inboxId || (i.email && i.email.toLowerCase() === inboxId.toLowerCase()));
+    if (!inbox) return null;
+
+    inbox.banStatus = status; // 'confirmed' | 'safe' | 'suspected'
+    inbox.isBanned = status === 'confirmed';
+    if (status === 'confirmed') {
+      inbox.isAmazon = true;
+      if (reason) inbox.banReason = reason;
+      inbox.bannedConfirmedAt = new Date().toISOString();
+    } else if (status === 'safe') {
+      inbox.banDismissedAt = new Date().toISOString();
+    }
+    inbox.updatedAt = new Date().toISOString();
+
+    this.writeLocal(data);
+
+    if (this.isCloudConnected && this.db) {
+      try {
+        await this.db.collection('inboxes').doc(inbox.id).set(sanitizeForFirestore({
+          isBanned: inbox.isBanned,
+          banStatus: inbox.banStatus,
+          banReason: inbox.banReason || null,
+          bannedConfirmedAt: inbox.bannedConfirmedAt || null,
+          banDismissedAt: inbox.banDismissedAt || null,
+          updatedAt: inbox.updatedAt
+        }), { merge: true });
+      } catch (e) {
+        console.error('⚠️ Firestore setInboxBanStatus error:', e.message);
+      }
+    }
+
+    return inbox;
   }
 
   getAmazonMessages() {
@@ -419,15 +457,18 @@ class InboxDatabase {
       inbox.lastCheckedAt = new Date().toISOString();
 
       if (this.isOfficialInbox(inbox)) {
-        if (!inbox.isBanned && (this.isBannedInbox(inbox, data.messages) || changedMessages.some(m => this.isBannedMessage(m)))) {
-          inbox.isBanned = true;
+        if (inbox.banStatus !== 'safe' && inbox.banStatus !== 'confirmed' && !inbox.isBanned) {
+          const matchingBanMsg = changedMessages.find(m => this.isBannedMessage(m)) || data.messages.find(m => String(m.inboxEmail || '').toLowerCase() === cleanEmail && this.isBannedMessage(m));
+          if (matchingBanMsg) {
+            inbox.banStatus = 'suspected';
+            inbox.isAmazon = true;
+            inbox.banReason = this.getBanReason(matchingBanMsg);
+            inbox.bannedDetectedAt = inbox.bannedDetectedAt || new Date().toISOString();
+          }
+        }
+        if (!inbox.isAmazon && (this.isAmazonInbox(inbox, data.messages) || changedMessages.some(m => this.isAmazonMessage(m)))) {
           inbox.isAmazon = true;
-          const matchingBanMsg = data.messages.find(m => String(m.inboxEmail || '').toLowerCase() === cleanEmail && this.isBannedMessage(m)) || changedMessages.find(m => this.isBannedMessage(m));
-          inbox.banReason = this.getBanReason(matchingBanMsg);
-          inbox.bannedDetectedAt = new Date().toISOString();
-        } else if (!inbox.isAmazon && (this.isAmazonInbox(inbox, data.messages) || changedMessages.some(m => this.isAmazonMessage(m)))) {
-          inbox.isAmazon = true;
-          inbox.amazonDetectedAt = new Date().toISOString();
+          inbox.amazonDetectedAt = inbox.amazonDetectedAt || new Date().toISOString();
         }
       }
     }
@@ -449,7 +490,8 @@ class InboxDatabase {
               messageCount: inbox.messageCount,
               lastCheckedAt: inbox.lastCheckedAt,
               isAmazon: inbox.isAmazon,
-              isBanned: inbox.isBanned,
+              isBanned: inbox.isBanned === true,
+              banStatus: inbox.banStatus || 'none',
               banReason: inbox.banReason || null,
               bannedDetectedAt: inbox.bannedDetectedAt || null,
               amazonDetectedAt: inbox.amazonDetectedAt || null

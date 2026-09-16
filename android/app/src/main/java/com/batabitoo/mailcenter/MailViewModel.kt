@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 
 enum class MainSection { INBOXES, AMAZON, MESSAGES, LOGS, SETTINGS }
 enum class InboxFilter { OFFICIAL, TEMP }
-enum class AmazonTab { ALL, BANNED, HEALTHY, MESSAGES }
+enum class AmazonTab { ALL, SUSPECTED, BANNED, HEALTHY, MESSAGES }
 enum class MessageFilter { CURRENT, OFFICIAL, TEMP }
 
 data class MailUiState(
@@ -34,6 +34,7 @@ data class MailUiState(
     val tempInboxes: List<Inbox> = emptyList(),
     val amazonInboxes: List<Inbox> = emptyList(),
     val bannedInboxes: List<Inbox> = emptyList(),
+    val suspectedInboxes: List<Inbox> = emptyList(),
     val activeInbox: Inbox? = null,
     val currentMessages: List<MailMessage> = emptyList(),
     val officialMessages: List<MailMessage> = emptyList(),
@@ -119,20 +120,37 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                 val bannedMsgs = allMsgsList.filter { it.isBanned }
 
                 val officialList = inboxes.official.map { inbox ->
-                    val isBanned = AmazonBannedDetector.isBannedInbox(inbox, allMsgsList)
-                    val isAmazon = isBanned || AmazonDetector.isAmazonInbox(inbox, allMsgsList)
+                    val isConfirmedBanned = AmazonBannedDetector.isConfirmedBanned(inbox)
+                    val isSuspected = AmazonBannedDetector.isSuspectedInbox(inbox, allMsgsList)
+                    val isAmazon = isConfirmedBanned || isSuspected || AmazonDetector.isAmazonInbox(inbox, allMsgsList)
                     val matchingMsg = allMsgsList.find { m ->
                         val inboxEmail = inbox.email.lowercase().trim()
                         (m.inboxEmail.lowercase().trim() == inboxEmail || m.to.lowercase().contains(inboxEmail)) && m.isBanned
                     }
-                    val reason = if (isBanned) matchingMsg?.banReason?.ifBlank { "حساب مقيد / محظور" } ?: "حساب مقيد / محظور" else ""
-                    inbox.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
+                    val reason = if (inbox.banReason.isNotBlank()) {
+                        inbox.banReason
+                    } else if (isConfirmedBanned || isSuspected) {
+                        matchingMsg?.banReason?.ifBlank { "حساب مقيد / محظور" } ?: "حساب مقيد / محظور"
+                    } else ""
+                    val banStatus = when {
+                        isConfirmedBanned -> "confirmed"
+                        isSuspected -> "suspected"
+                        inbox.banStatus == "safe" -> "safe"
+                        else -> "none"
+                    }
+                    inbox.copy(
+                        isAmazon = isAmazon,
+                        isBanned = isConfirmedBanned,
+                        banStatus = banStatus,
+                        banReason = reason,
+                    )
                 }
                 val tempList = inboxes.temp.map { inbox ->
-                    inbox.copy(isAmazon = false, isBanned = false)
+                    inbox.copy(isAmazon = false, isBanned = false, banStatus = "none")
                 }
                 val amazonInboxList = officialList.filter { it.isAmazon }
-                val bannedInboxList = officialList.filter { it.isBanned }
+                val bannedInboxList = officialList.filter { it.isConfirmedBanned }
+                val suspectedInboxList = officialList.filter { it.isSuspected }
 
                 _uiState.update {
                     it.copy(
@@ -140,17 +158,26 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                             messages = allMsgsList.size,
                             amazon = amazonInboxList.size,
                             banned = bannedInboxList.size,
+                            suspected = suspectedInboxList.size,
                         ),
                         officialInboxes = officialList,
                         tempInboxes = tempList,
                         amazonInboxes = amazonInboxList,
                         bannedInboxes = bannedInboxList,
+                        suspectedInboxes = suspectedInboxList,
                         appUpdate = appVersion,
                         activeInbox = current.inbox?.let { active ->
-                            val isBanned = AmazonBannedDetector.isBannedInbox(active, allMsgsList)
-                            val isAmazon = isBanned || AmazonDetector.isAmazonInbox(active, allMsgsList)
-                            val reason = if (isBanned) "حساب مقيد / محظور" else ""
-                            active.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
+                            val isConfirmedBanned = AmazonBannedDetector.isConfirmedBanned(active)
+                            val isSuspected = AmazonBannedDetector.isSuspectedInbox(active, allMsgsList)
+                            val isAmazon = isConfirmedBanned || isSuspected || AmazonDetector.isAmazonInbox(active, allMsgsList)
+                            val banStatus = when {
+                                isConfirmedBanned -> "confirmed"
+                                isSuspected -> "suspected"
+                                active.banStatus == "safe" -> "safe"
+                                else -> "none"
+                            }
+                            val reason = if (active.banReason.isNotBlank()) active.banReason else if (isConfirmedBanned || isSuspected) "حساب مقيد / محظور" else ""
+                            active.copy(isAmazon = isAmazon, isBanned = isConfirmedBanned, banStatus = banStatus, banReason = reason)
                         },
                         currentMessages = current.messages.map { msg ->
                             val isBanned = AmazonBannedDetector.isBannedMessage(msg)
@@ -293,6 +320,38 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                     refreshAll()
                 }
                 .onFailure { showError(it) }
+        }
+    }
+
+    fun updateBanStatus(inbox: Inbox, status: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null) }
+            runCatching {
+                repository.setBanStatus(inbox.id, status)
+            }.onSuccess {
+                val actionText = if (status == "confirmed") "تم تأكيد حظر الحساب ⛔" else "تم تأكيد سلامة الحساب ✅"
+                _uiState.update {
+                    it.copy(
+                        refreshing = false,
+                        notice = actionText,
+                        officialInboxes = it.officialInboxes.map { item ->
+                            if (item.id == inbox.id) item.copy(banStatus = status, isBanned = (status == "confirmed")) else item
+                        },
+                        amazonInboxes = it.amazonInboxes.map { item ->
+                            if (item.id == inbox.id) item.copy(banStatus = status, isBanned = (status == "confirmed")) else item
+                        },
+                        bannedInboxes = if (status == "confirmed") {
+                            (it.bannedInboxes.filter { b -> b.id != inbox.id } + inbox.copy(banStatus = "confirmed", isBanned = true))
+                        } else {
+                            it.bannedInboxes.filter { b -> b.id != inbox.id }
+                        },
+                        suspectedInboxes = it.suspectedInboxes.filter { s -> s.id != inbox.id },
+                    )
+                }
+                refreshAll()
+            }.onFailure { err ->
+                _uiState.update { it.copy(refreshing = false, error = "تعذر تحديث حالة الحساب: ${err.message}") }
+            }
         }
     }
 

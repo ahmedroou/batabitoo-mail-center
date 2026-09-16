@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=8">
-  <link rel="stylesheet" href="/reader.css?v=1">
+  <link rel="stylesheet" href="/styles.css?v=11">
+  <link rel="stylesheet" href="/reader.css?v=2">
 </head>
 <body>
   <div class="app-shell">
@@ -93,6 +93,7 @@
               <div class="amazon-stat-tile"><span>حسابات أمازون</span><strong id="amazon-stat-inboxes">0</strong></div>
               <div class="amazon-stat-tile"><span>رسائل أمازون</span><strong id="amazon-stat-messages">0</strong></div>
               <div class="amazon-stat-tile highlight-gold"><span>أكواد التحقق</span><strong id="amazon-stat-otps">0</strong></div>
+              <div class="amazon-stat-tile highlight-amber"><span>اشتباه حظر</span><strong id="amazon-stat-suspected">0</strong></div>
               <div class="amazon-stat-tile highlight-red"><span>محظورة / مقيدة</span><strong id="amazon-stat-banned">0</strong></div>
             </div>
           </div>
@@ -102,6 +103,7 @@
               <div class="amazon-sub-tabs" id="amazon-sub-tabs">
                 <button class="active" data-amazon-filter="all"><span>كل رسائل أمازون</span><b id="amz-tab-all-count">0</b></button>
                 <button data-amazon-filter="otp"><span class="tab-emoji">⚡</span><span>أكواد التحقق (OTP)</span><b id="amz-tab-otp-count">0</b></button>
+                <button data-amazon-filter="suspected"><span class="tab-emoji">⚠️</span><span>اشتباه حظر</span><b id="amz-tab-suspected-count">0</b></button>
                 <button data-amazon-filter="banned"><span class="tab-emoji">⛔</span><span>المحظور والمقيد</span><b id="amz-tab-banned-count">0</b></button>
                 <button data-amazon-filter="orders"><span class="tab-emoji">📦</span><span>الطلبات والشحنات</span><b id="amz-tab-orders-count">0</b></button>
               </div>
@@ -217,6 +219,6 @@
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=10" defer></script>
+  <script src="/app.js?v=11" defer></script>
 </body>
 </html>

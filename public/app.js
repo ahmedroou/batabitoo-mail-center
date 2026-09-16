@@ -63,6 +63,10 @@ const state = {
   inboxType: 'official',
   view: 'current',
   createType: 'official',
+  amazonSubFilter: 'all',
+  amazonSelectedInbox: null,
+  activeMessageList: [],
+  currentMessageIndex: -1,
   official: [],
   temp: [],
   amazon: [],
@@ -89,7 +93,7 @@ function placeHero() {
   if (state.currentMessage) {
     document.body.dataset.screen = 'reader';
   } else {
-    document.body.dataset.screen = inAccounts ? 'inboxes' : state.view === 'logs' ? 'logs' : 'messages';
+    document.body.dataset.screen = inAccounts ? 'inboxes' : state.view === 'logs' ? 'logs' : state.view === 'amazon' ? 'amazon' : 'messages';
   }
   document.dispatchEvent(new Event('mail-layout-change'));
 }
@@ -135,6 +139,18 @@ function bindEvents() {
     switchContentView(button.dataset.view);
   });
   $('inbox-list').addEventListener('click', event => {
+    const confirmBtn = event.target.closest('[data-confirm-ban]');
+    if (confirmBtn) {
+      event.stopPropagation();
+      updateBanStatus(confirmBtn.dataset.confirmBan, 'confirmed', 'تم التأكيد يدوياً');
+      return;
+    }
+    const safeBtn = event.target.closest('[data-mark-safe]');
+    if (safeBtn) {
+      event.stopPropagation();
+      updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
+      return;
+    }
     if (event.target.closest('[data-load-more]')) {
       inboxLimit += 40;
       renderInboxes();
@@ -160,8 +176,61 @@ function bindEvents() {
     if (message) openMessage(decodeURIComponent(message.dataset.messageId));
   });
 
+  // Dedicated Amazon Hub Event Listeners
+  $('open-amazon-hub-btn')?.addEventListener('click', () => switchContentView('amazon'));
+  $('stat-amazon-card')?.addEventListener('click', () => switchContentView('amazon'));
+  $('amazon-quick-create-btn')?.addEventListener('click', createQuickAmazonInbox);
+  $('amazon-copy-active-btn')?.addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد النشط'));
+  $('amazon-refresh-btn')?.addEventListener('click', refreshAmazonHub);
+  $('amazon-search')?.addEventListener('input', renderAmazonMessages);
+  $('amazon-sub-tabs')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-amazon-filter]');
+    if (!btn) return;
+    state.amazonSubFilter = btn.dataset.amazonFilter;
+    document.querySelectorAll('[data-amazon-filter]').forEach(b => b.classList.toggle('active', b === btn));
+    renderAmazonMessages();
+  });
+  $('amazon-inboxes-reel')?.addEventListener('click', event => {
+    const addBtn = event.target.closest('#reel-quick-add');
+    if (addBtn) {
+      createQuickAmazonInbox();
+      return;
+    }
+    const item = event.target.closest('[data-reel-inbox]');
+    if (!item) return;
+    const target = item.dataset.reelInbox;
+    state.amazonSelectedInbox = target === 'all' ? null : target;
+    renderAmazonInboxesReel();
+    renderAmazonMessages();
+  });
+  $('amazon-message-list')?.addEventListener('click', event => {
+    const confirmBtn = event.target.closest('[data-confirm-ban]');
+    if (confirmBtn) {
+      event.stopPropagation();
+      updateBanStatus(confirmBtn.dataset.confirmBan, 'confirmed', 'تم التأكيد يدوياً');
+      return;
+    }
+    const safeBtn = event.target.closest('[data-mark-safe]');
+    if (safeBtn) {
+      event.stopPropagation();
+      updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
+      return;
+    }
+    const otp = event.target.closest('[data-copy-otp]');
+    if (otp) {
+      event.stopPropagation();
+      copyText(decodeURIComponent(otp.dataset.copyOtp), 'تم نسخ رمز التحقق');
+      return;
+    }
+    const message = event.target.closest('[data-message-id]');
+    if (message) openMessage(decodeURIComponent(message.dataset.messageId));
+  });
+
   // Dedicated Message Reader Navigation & Actions
   $('reader-back-btn')?.addEventListener('click', () => closeReader());
+  $('reader-prev-btn')?.addEventListener('click', navigatePreviousMessage);
+  $('reader-next-btn')?.addEventListener('click', navigateNextMessage);
+  $('reader-print-btn')?.addEventListener('click', printCurrentMessage);
   $('reader-retry-btn')?.addEventListener('click', () => { if (state.currentMessage?.id) openMessage(state.currentMessage.id, false); });
   $('reader-copy-otp-btn')?.addEventListener('click', () => copyText(state.currentMessage?.otp, 'تم نسخ رمز التحقق'));
   $('reader-copy-all-btn')?.addEventListener('click', () => {
@@ -236,6 +305,16 @@ function bindEvents() {
       }
       document.querySelectorAll('.modal-backdrop').forEach(item => item.classList.add('hidden'));
     }
+    if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
+    if (state.currentMessage) {
+      if (event.key === 'j' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        navigateNextMessage();
+      } else if (event.key === 'k' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        navigatePreviousMessage();
+      }
+    }
   });
 }
 
@@ -284,16 +363,44 @@ async function loadStatus() {
   setConnection(true, data.cloudConnected);
 }
 
+async function updateBanStatus(id, banStatus, reason = '') {
+  try {
+    await api('/api/inbox/ban-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, banStatus, reason })
+    });
+    const text = banStatus === 'confirmed' ? 'تم تأكيد حظر الحساب بنجاح ⛔' : 'تم تأكيد سلامة الحساب وإلغاء الاشتباه ✅';
+    toast(text);
+    await refreshEverything();
+  } catch (err) {
+    toast(friendlyError(err), true);
+  }
+}
+
+function findInboxByEmail(email) {
+  if (!email) return null;
+  const clean = String(email).trim().toLowerCase();
+  return state.official.find(i => (i.email || '').toLowerCase() === clean) || state.temp.find(i => (i.email || '').toLowerCase() === clean);
+}
+
 async function loadInboxes() {
   const data = await api('/api/inboxes');
   state.official = (data.official || []).map(i => ({
     ...i,
-    isBanned: isBannedInbox(i),
+    isBanned: isConfirmedBanned(i),
+    isSuspected: isSuspectedInbox(i),
     isAmazon: isAmazonInbox(i)
   }));
   state.temp = data.temp || [];
-  state.amazon = (data.amazon || state.official.filter(i => i.isAmazon)).map(i => ({ ...i, isAmazon: true }));
-  state.banned = (data.banned || state.official.filter(i => i.isBanned)).map(i => ({ ...i, isBanned: true, isAmazon: true }));
+  state.amazon = (data.amazon || state.official.filter(i => i.isAmazon)).map(i => ({
+    ...i,
+    isAmazon: true,
+    isBanned: isConfirmedBanned(i),
+    isSuspected: isSuspectedInbox(i)
+  }));
+  state.banned = (data.banned || state.official.filter(i => isConfirmedBanned(i))).map(i => ({ ...i, isBanned: true, isAmazon: true }));
+  state.suspected = (data.suspected || state.official.filter(i => isSuspectedInbox(i))).map(i => ({ ...i, isAmazon: true, isSuspected: true }));
   state.activeId = data.activeId || state.activeId;
   if (state.activeId) {
     markInboxAsRead(state.activeId);
@@ -383,24 +490,33 @@ function renderInboxes() {
   }
   const markup = list.slice(0, inboxLimit).map(inbox => {
     const official = isOfficial(inbox);
-    const banned = isBannedInbox(inbox);
+    const banned = isConfirmedBanned(inbox);
+    const suspected = isSuspectedInbox(inbox);
     const amazon = isAmazonInbox(inbox);
     const unread = isInboxUnread(inbox);
     const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
     const id = encodeURIComponent(inbox.id || '');
     const reason = inbox.banReason || 'محظور';
-    return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''} ${unread ? 'has-unread' : ''}" data-inbox-id="${attr(id)}">
+    return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''} ${unread ? 'has-unread' : ''} ${suspected ? 'is-suspected' : ''}" data-inbox-id="${attr(id)}">
       <div class="inbox-item-avatar">
-        ${banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(label)}
+        ${banned ? '⛔' : suspected ? '⚠️' : amazon ? '🛒' : official ? '♛' : initials(label)}
         ${unread ? '<span class="unread-dot" title="رسائل جديدة غير مقروءة"></span>' : ''}
       </div>
       <div class="inbox-item-copy">
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           <strong>${html(label)}</strong>
           ${unread ? '<span class="unread-pill" title="رسائل جديدة غير مقروءة">جديد</span>' : ''}
-          ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
+          ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : suspected ? `<span class="suspected-badge" title="${attr(reason)}">⚠️ اشتباه حظر</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
         </div>
         <span>${html(inbox.email || '')}</span>
+        ${suspected ? `
+        <div class="ban-confirm-inline" onclick="event.stopPropagation()">
+          <span class="ban-confirm-q">هل تم حظر هذا الحساب فعلاً؟</span>
+          <div class="ban-confirm-btns">
+            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
+          </div>
+        </div>` : ''}
       </div>
       <span class="inbox-count ${unread ? 'unread' : ''}">${formatNumber(inbox.messageCount || 0)}</span>
       <button class="inbox-more" data-delete-id="${attr(id)}" title="حذف الصندوق" aria-label="حذف الصندوق"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg></button>
@@ -423,13 +539,14 @@ function updateActiveInbox() {
     return;
   }
   const official = isOfficial(inbox);
-  const banned = isBannedInbox(inbox);
+  const banned = isConfirmedBanned(inbox);
+  const suspected = isSuspectedInbox(inbox);
   const amazon = isAmazonInbox(inbox);
   $('active-email').textContent = inbox.email || '—';
   $('active-host').textContent = inbox.host || inbox.domain || '';
-  $('active-badge').textContent = banned ? `⛔ محظور (${inbox.banReason || 'مقيد'})` : amazon ? '🛒 حساب أمازون' : official ? '♛ بريد رسمي' : 'ϟ بريد سريع';
-  $('active-badge').style.color = banned ? '#dc2626' : amazon ? '#ea580c' : official ? 'var(--gold)' : 'var(--green)';
-  $('active-avatar').textContent = banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(inbox.personName || inbox.label || inbox.email);
+  $('active-badge').textContent = banned ? `⛔ محظور (${inbox.banReason || 'مقيد'})` : suspected ? '⚠️ اشتباه حظر' : amazon ? '🛒 حساب أمازون' : official ? '♛ بريد رسمي' : 'ϟ بريد سريع';
+  $('active-badge').style.color = banned ? '#dc2626' : suspected ? '#d97706' : amazon ? '#ea580c' : official ? 'var(--gold)' : 'var(--green)';
+  $('active-avatar').textContent = banned ? '⛔' : suspected ? '⚠️' : amazon ? '🛒' : official ? '♛' : initials(inbox.personName || inbox.label || inbox.email);
   $('active-avatar').classList.toggle('official', official);
   $('copy-email').disabled = !inbox.email;
 }
@@ -464,28 +581,43 @@ function switchContentView(view) {
   placeHero();
   $('content-search').value = '';
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+
+  if (view === 'amazon') {
+    $('feed-shell')?.classList.add('hidden');
+    $('amazon-hub-shell')?.classList.remove('hidden');
+    renderAmazonHub();
+    loadSeparated('amazon').then(() => renderAmazonHub());
+    return;
+  }
+
+  $('amazon-hub-shell')?.classList.add('hidden');
+  $('feed-shell')?.classList.remove('hidden');
+
   const map = {
     current: ['البريد الوارد', 'أحدث الرسائل', 'بحث في الرسائل'],
-    amazon: ['بريد أمازون', 'رسائل ورموز أمازون', 'بحث في رسائل أمازون'],
     banned: ['الحسابات المحظورة', 'رسائل الحظر والتقييد بالمشتريات الرقمية', 'بحث في رسائل الحظر والتقييد'],
     official: ['البريد الرسمي', 'رسائل النطاق الرسمي', 'بحث في الرسائل الرسمية'],
     temp: ['البريد السريع', 'رسائل النطاقات المؤقتة', 'بحث في الرسائل السريعة'],
     logs: ['سجل الحملة', 'تسجيلات نيفيا', 'بحث بالاسم أو الجوال']
   };
   [$('view-kicker').textContent, $('view-title').textContent, $('content-search').placeholder] = map[view] || map.current;
-  if (view === 'official' || view === 'temp' || view === 'amazon' || view === 'banned') loadSeparated(view);
+  if (view === 'official' || view === 'temp' || view === 'banned') loadSeparated(view);
   else if (view === 'logs') loadLogs(true).catch(error => showEmpty('تعذر تحميل السجل', friendlyError(error)));
   else renderContent();
 }
 
 function renderContent() {
+  if (state.view === 'amazon') {
+    renderAmazonHub();
+    return;
+  }
   const query = normalize($('content-search').value);
   if (state.view === 'logs') {
     const logs = query ? state.logs.filter(item => normalize([item.personName, item.realEmail, item.mobile, item.receiptNumber, item.city].join(' ')).includes(query)) : state.logs;
     renderLogs(logs);
     return;
   }
-  const source = state.view === 'current' ? state.messages : state.view === 'banned' ? state.bannedMessages : state.view === 'amazon' ? state.amazonMessages : state.view === 'official' ? state.officialMessages : state.tempMessages;
+  const source = state.view === 'current' ? state.messages : state.view === 'banned' ? state.bannedMessages : state.view === 'official' ? state.officialMessages : state.tempMessages;
   const list = query ? source.filter(message => normalize([formatAddress(message.from), formatAddress(message.to), message.subject, message.text, message.intro, message.otp, message.inboxEmail].join(' ')).includes(query)) : source;
   renderMessages(list);
 }
@@ -517,6 +649,262 @@ function renderMessages(messages) {
   }).join('');
 }
 
+function isAmazonOrderMessage(msg) {
+  if (!msg) return false;
+  const text = [msg.subject, msg.intro, msg.text, formatAddress(msg.from)].filter(Boolean).join(' ').toLowerCase();
+  return /طلب|شحن|شحنة|توصيل|تم شحن|تأكيد الطلب|order|shipment|delivery|shipped|dispatched|package|tracking/i.test(text);
+}
+
+function getFilteredAmazonMessages() {
+  let list = state.amazonMessages || [];
+  if (state.amazonSelectedInbox) {
+    const sel = state.amazonSelectedInbox.toLowerCase();
+    list = list.filter(m => (m.inboxEmail || '').toLowerCase() === sel);
+  }
+  if (state.amazonSubFilter === 'otp') {
+    list = list.filter(m => Boolean(m.otp));
+  } else if (state.amazonSubFilter === 'suspected') {
+    list = list.filter(m => {
+      const inbox = findInboxByEmail(m.inboxEmail);
+      if (inbox && isConfirmedBanned(inbox)) return false;
+      return isBannedMessage(m) || isSuspectedInbox(inbox);
+    });
+  } else if (state.amazonSubFilter === 'banned') {
+    list = list.filter(m => {
+      const inbox = findInboxByEmail(m.inboxEmail);
+      return isConfirmedBanned(inbox);
+    });
+  } else if (state.amazonSubFilter === 'orders') {
+    list = list.filter(m => isAmazonOrderMessage(m));
+  }
+  const query = normalize($('amazon-search')?.value);
+  if (query) {
+    list = list.filter(m => normalize([formatAddress(m.from), formatAddress(m.to), m.subject, m.text, m.intro, m.otp, m.inboxEmail].join(' ')).includes(query));
+  }
+  return list;
+}
+
+function renderAmazonInboxesReel() {
+  const reel = $('amazon-inboxes-reel');
+  if (!reel) return;
+  const inboxes = state.amazon || [];
+  const selectedEmail = state.amazonSelectedInbox;
+
+  let htmlStr = `<button class="amazon-reel-item ${!selectedEmail ? 'active' : ''}" data-reel-inbox="all">
+    <span>🌐 كل حسابات أمازون</span>
+    <span class="reel-count">${formatNumber(state.amazonMessages.length)}</span>
+  </button>`;
+
+  htmlStr += inboxes.map(inbox => {
+    const isSelected = selectedEmail && inbox.email?.toLowerCase() === selectedEmail.toLowerCase();
+    const count = (state.amazonMessages || []).filter(m => (m.inboxEmail || '').toLowerCase() === (inbox.email || '').toLowerCase()).length;
+    const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
+    const isBanned = isConfirmedBanned(inbox);
+    const isSuspected = isSuspectedInbox(inbox);
+    return `<button class="amazon-reel-item ${isSelected ? 'active' : ''} ${isSuspected ? 'is-suspected' : isBanned ? 'is-banned' : ''}" data-reel-inbox="${attr(inbox.email || '')}" title="${attr(inbox.email || '')}">
+      <span>${isBanned ? '⛔' : isSuspected ? '⚠️' : '🛒'} ${html(label)}</span>
+      <span class="reel-count">${formatNumber(count)}</span>
+    </button>`;
+  }).join('');
+
+  htmlStr += `<button class="amazon-reel-add" id="reel-quick-add" type="button" title="إنشاء حساب تتابعي فوري">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    <span>+ حساب جديد</span>
+  </button>`;
+
+  reel.innerHTML = htmlStr;
+}
+
+function renderAmazonMessages() {
+  const container = $('amazon-message-list');
+  if (!container) return;
+  const list = getFilteredAmazonMessages();
+
+  if (!list.length) {
+    container.innerHTML = `<div class="empty-state" style="padding: 36px 16px;">
+      <div class="empty-icon">🛒</div>
+      <h3>لا توجد رسائل مطابقة</h3>
+      <p>لم يتم العثور على رسائل تحت هذا التصنيف في أمازون.</p>
+    </div>`;
+    return;
+  }
+
+  container.innerHTML = list.map(message => {
+    const sender = cleanSenderName(message.from, message.subject);
+    const otp = message.otp ? String(message.otp) : '';
+    const hasBanContent = isBannedMessage(message);
+    const inbox = findInboxByEmail(message.inboxEmail);
+    const isBanned = isConfirmedBanned(inbox);
+    const isSuspected = !isBanned && (hasBanContent || isSuspectedInbox(inbox));
+    const reason = getBanReason(message);
+    const isOrder = isAmazonOrderMessage(message);
+
+    return `<article class="message-card ${isBanned ? 'is-banned-card' : isSuspected ? 'is-suspected-card' : ''}" data-message-id="${attr(encodeURIComponent(message.id || ''))}">
+      <div class="sender-avatar">${isBanned ? '⛔' : isSuspected ? '⚠️' : isOrder ? '📦' : '🛒'}</div>
+      <div class="message-main">
+        <div class="message-top">
+          <strong style="display:inline-flex;align-items:center;gap:6px;">
+            ${html(sender)}
+            ${isBanned ? `<span class="banned-badge">⛔ ${html(reason)}</span>` : isSuspected ? `<span class="suspected-badge">⚠️ اشتباه حظر</span>` : isOrder ? '<span class="order-badge">📦 طلب/شحنة</span>' : '<span class="amazon-badge">أمازون</span>'}
+          </strong>
+          <time>${html(formatDate(message.createdAt))}</time>
+        </div>
+        <div class="message-subject">${html(message.subject || '(بدون عنوان)')}</div>
+        <div class="message-preview">${html(message.intro || message.text || formatAddress(message.to) || '')}</div>
+        ${isSuspected && inbox ? `
+        <div class="ban-confirm-inline" onclick="event.stopPropagation()">
+          <span class="ban-confirm-q">هل تم حظر أو تقييد هذا الحساب فعلاً؟</span>
+          <div class="ban-confirm-btns">
+            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
+          </div>
+        </div>` : ''}
+      </div>
+      ${otp ? `<button class="otp-chip highlight" data-copy-otp="${attr(encodeURIComponent(otp))}"><span>رمز التحقق</span><strong>${html(otp)}</strong></button>` : '<span class="message-arrow">←</span>'}
+    </article>`;
+  }).join('');
+}
+
+function renderAmazonHub() {
+  const amzMsgs = state.amazonMessages || [];
+  const otps = amzMsgs.filter(m => Boolean(m.otp));
+  const suspectedMsgs = amzMsgs.filter(m => {
+    const inbox = findInboxByEmail(m.inboxEmail);
+    if (inbox && isConfirmedBanned(inbox)) return false;
+    return isBannedMessage(m) || isSuspectedInbox(inbox);
+  });
+  const bannedMsgs = amzMsgs.filter(m => {
+    const inbox = findInboxByEmail(m.inboxEmail);
+    return isConfirmedBanned(inbox);
+  });
+  const orders = amzMsgs.filter(m => isAmazonOrderMessage(m));
+
+  if ($('amazon-stat-inboxes')) $('amazon-stat-inboxes').textContent = formatNumber(state.amazon.length);
+  if ($('amazon-stat-messages')) $('amazon-stat-messages').textContent = formatNumber(amzMsgs.length);
+  if ($('amazon-stat-otps')) $('amazon-stat-otps').textContent = formatNumber(otps.length);
+  if ($('amazon-stat-suspected')) $('amazon-stat-suspected').textContent = formatNumber(state.suspected.length || suspectedMsgs.length);
+  if ($('amazon-stat-banned')) $('amazon-stat-banned').textContent = formatNumber(state.banned.length || bannedMsgs.length);
+
+  if ($('amazon-nav-count')) $('amazon-nav-count').textContent = formatNumber(amzMsgs.length);
+  if ($('amazon-seq-name')) $('amazon-seq-name').textContent = getNextSequentialPrefix('ahmedroou');
+
+  if ($('amz-tab-all-count')) $('amz-tab-all-count').textContent = formatNumber(amzMsgs.length);
+  if ($('amz-tab-otp-count')) $('amz-tab-otp-count').textContent = formatNumber(otps.length);
+  if ($('amz-tab-suspected-count')) $('amz-tab-suspected-count').textContent = formatNumber(suspectedMsgs.length);
+  if ($('amz-tab-banned-count')) $('amz-tab-banned-count').textContent = formatNumber(bannedMsgs.length);
+  if ($('amz-tab-orders-count')) $('amz-tab-orders-count').textContent = formatNumber(orders.length);
+
+  renderAmazonInboxesReel();
+  renderAmazonMessages();
+}
+
+async function createQuickAmazonInbox() {
+  const next = getNextSequentialPrefix('ahmedroou');
+  const btn = $('amazon-quick-create-btn');
+  setBusy(btn, true, `جاري إنشاء ${next}…`);
+  try {
+    const data = await api('/api/official/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personName: next, label: next, prefix: next })
+    });
+    if (!data.inbox) throw new Error('تعذر إنشاء حساب أمازون');
+    toast(`تم إنشاء حساب أمازون: ${data.inbox.email}`);
+    await refreshEverything();
+    await selectInbox(data.inbox.id);
+    switchContentView('amazon');
+  } catch (err) {
+    toast(friendlyError(err), true);
+  } finally {
+    setBusy(btn, false);
+    if ($('amazon-seq-name')) $('amazon-seq-name').textContent = getNextSequentialPrefix('ahmedroou');
+  }
+}
+
+async function refreshAmazonHub() {
+  const btn = $('amazon-refresh-btn');
+  setBusy(btn, true, 'جارٍ التحديث…');
+  try {
+    await Promise.all([loadInboxes(), loadSeparated('amazon'), loadStatus()]);
+    renderAmazonHub();
+    toast('تم تحديث مركز أمازون');
+  } catch (err) {
+    toast(friendlyError(err), true);
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+function getActiveMessageList() {
+  if (state.view === 'amazon') {
+    return getFilteredAmazonMessages();
+  }
+  const query = normalize($('content-search')?.value);
+  const source = state.view === 'current' ? state.messages : state.view === 'banned' ? state.bannedMessages : state.view === 'official' ? state.officialMessages : state.tempMessages;
+  return query ? source.filter(message => normalize([formatAddress(message.from), formatAddress(message.to), message.subject, message.text, message.intro, message.otp, message.inboxEmail].join(' ')).includes(query)) : source;
+}
+
+function updateReaderNavigation(id) {
+  state.activeMessageList = getActiveMessageList();
+  const idx = state.activeMessageList.findIndex(m => String(m.id) === String(id));
+  state.currentMessageIndex = idx;
+  const total = state.activeMessageList.length;
+
+  const counter = $('reader-counter');
+  const prevBtn = $('reader-prev-btn');
+  const nextBtn = $('reader-next-btn');
+
+  if (idx !== -1 && total > 0) {
+    if (counter) counter.textContent = `${idx + 1} / ${total}`;
+    if (prevBtn) prevBtn.disabled = idx <= 0;
+    if (nextBtn) nextBtn.disabled = idx >= total - 1;
+  } else {
+    if (counter) counter.textContent = '1 / 1';
+    if (prevBtn) prevBtn.disabled = true;
+    if (nextBtn) nextBtn.disabled = true;
+  }
+}
+
+function navigatePreviousMessage() {
+  if (!state.currentMessage || state.currentMessageIndex <= 0) return;
+  const list = state.activeMessageList;
+  const prev = list[state.currentMessageIndex - 1];
+  if (prev && prev.id) openMessage(prev.id);
+}
+
+function navigateNextMessage() {
+  if (!state.currentMessage || state.currentMessageIndex >= state.activeMessageList.length - 1) return;
+  const list = state.activeMessageList;
+  const next = list[state.currentMessageIndex + 1];
+  if (next && next.id) openMessage(next.id);
+}
+
+function printCurrentMessage() {
+  const frame = $('reader-frame');
+  if (frame && frame.contentWindow) {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch (e) {
+      window.print();
+    }
+  }
+}
+
+function getBanDetailText(msg) {
+  const reason = getBanReason(msg);
+  if (reason.includes('مشتريات رقمية')) {
+    return 'أرسلت أمازون إشعارًا بأن هذا الحساب مقيد لاستخدام المشتريات الرقمية فقط وفقًا لسياسة المرتجعات.';
+  }
+  if (reason.includes('إغلاق')) {
+    return 'أرسلت أمازون إشعارًا بإغلاق هذا الحساب وإنهاء الخدمة.';
+  }
+  if (reason.includes('OFM')) {
+    return 'رسالة مراجعة وتدقيق أمني من فريق OFM / Account Specialist لدى أمازون.';
+  }
+  return 'تم تصنيف هذه الرسالة كتنبيه تقييد أو حظر من نظام أمازون.';
+}
+
 function renderLogs(logs) {
   if (!logs.length) return showEmpty('لا توجد تسجيلات', 'ستظهر عمليات التسجيل المكتملة في هذا السجل.');
   hideEmpty();
@@ -537,12 +925,15 @@ async function openMessage(id, pushHistory = true) {
   stopReaderResize();
   state.currentMessage = { id };
   $('feed-shell')?.classList.add('hidden');
+  $('amazon-hub-shell')?.classList.add('hidden');
   $('reader-shell')?.classList.remove('hidden');
   document.body.dataset.screen = 'reader';
   document.dispatchEvent(new Event('mail-layout-change'));
   if (mobileLayout.matches) {
     document.querySelector('.workspace')?.classList.add('show-content');
   }
+
+  updateReaderNavigation(id);
 
   $('reader-subject').textContent = 'جاري تحميل الرسالة…';
   $('reader-from').textContent = '—';
@@ -574,15 +965,54 @@ async function openMessage(id, pushHistory = true) {
 
     const sender = cleanSenderName(message.from, message.subject);
     const recipient = formatAddress(message.to) || message.inboxEmail || state.activeInbox?.email || '—';
+    const isBanned = isBannedMessage(message);
+    const isAmz = isAmazonMessage(message);
+    const isOff = isOfficial(state.activeInbox) || (message.inboxEmail && message.inboxEmail.endsWith('@batabitoo.com'));
 
     $('reader-subject').textContent = message.subject || '(بدون عنوان)';
     $('reader-from').textContent = sender;
     $('reader-to').textContent = recipient;
     $('reader-date').textContent = formatDate(message.createdAt, true);
-    $('reader-avatar').textContent = initials(sender);
+    $('reader-avatar').textContent = isBanned ? '⛔' : isAmz ? '🛒' : initials(sender);
     const cleanText = decodeBase64IfNeeded(message.text || '');
     $('reader-copy-all-btn').disabled = !cleanText;
     $('reader-subject').focus({ preventScroll: true });
+
+    // Update Brand Pill
+    const brandPill = $('reader-brand-pill');
+    if (brandPill) {
+      brandPill.className = 'reader-brand-pill';
+      if (isBanned) {
+        brandPill.textContent = '⛔ مقيد / محظور';
+        brandPill.classList.add('brand-banned');
+        brandPill.classList.remove('hidden');
+      } else if (isAmz) {
+        brandPill.textContent = '🛒 أمازون (Amazon)';
+        brandPill.classList.add('brand-amazon');
+        brandPill.classList.remove('hidden');
+      } else if (isOff) {
+        brandPill.textContent = '♛ بريد رسمي';
+        brandPill.classList.add('brand-official');
+        brandPill.classList.remove('hidden');
+      } else {
+        brandPill.textContent = 'ϟ بريد سريع';
+        brandPill.classList.add('brand-temp');
+        brandPill.classList.remove('hidden');
+      }
+    }
+
+    // Update Ban Alert Banner
+    const banAlert = $('reader-ban-alert');
+    if (banAlert) {
+      if (isBanned) {
+        banAlert.classList.remove('hidden');
+        if ($('reader-ban-title')) $('reader-ban-title').textContent = `تنبيه من أمازون: ${getBanReason(message)}`;
+        if ($('reader-ban-desc')) $('reader-ban-desc').textContent = getBanDetailText(message);
+      } else {
+        banAlert.classList.add('hidden');
+      }
+    }
+
     if (message.bodyStatus === 'unavailable') {
       $('reader-notice').textContent = 'النسخة المحفوظة لهذه الرسالة ناقصة من المصدر؛ لا يتوفر محتواها الأصلي لعرضه.';
       $('reader-notice').classList.remove('hidden');
@@ -648,7 +1078,13 @@ function closeReader(updateHistory = true) {
   stopReaderResize();
   state.currentMessage = null;
   $('reader-shell')?.classList.add('hidden');
-  $('feed-shell')?.classList.remove('hidden');
+  if (state.view === 'amazon') {
+    $('amazon-hub-shell')?.classList.remove('hidden');
+    $('feed-shell')?.classList.add('hidden');
+  } else {
+    $('feed-shell')?.classList.remove('hidden');
+    $('amazon-hub-shell')?.classList.add('hidden');
+  }
   const frame = $('reader-frame');
   if (frame) frame.srcdoc = '';
   placeHero();
@@ -820,68 +1256,60 @@ function isBannedMessage(msg) {
   if (!msg) return false;
   if (msg.isBanned === true) return true;
   const textToCheck = [
-    formatAddress(msg.from),
-    formatAddress(msg.to),
     msg.subject,
     msg.intro,
-    msg.text,
-    msg.inboxEmail
+    msg.text
   ].filter(Boolean).join(' ').toLowerCase();
 
-  const hasBannedSender = /ofm@amazon|cis@amazon|buyer-returns@amazon|account-alert@amazon|buyer-investigations@amazon|الموظف المختص بالأمور المتعلقة بالحساب|account specialist/i.test(textToCheck);
   const hasDigitalRestriction = /المشتريات الرقمية|مشتريات رقمية|digital purchases only|digital orders only|غير الرقمية|سياسة المرتجعات ورد الأموال|انتهاكات متعددة لسياسة المرتجعات/i.test(textToCheck);
-  const hasAccountClosure = /أغلقنا هذا الحساب|اغلقنا هذا الحساب|تم إغلاق حسابك|تم اغلاق حسابك|تم حظر حسابك|تم تعليق حسابك|إنهاء الحسابات|انهاء الحسابات|رفض الخدمة|إنهاء استخدام خدمات أمازون|انهاء استخدام خدمات امازون|closed this account|account has been closed|account closure|terminate your account|terminated your account|refuse service, terminate accounts|account on hold|account suspended|account locked/i.test(textToCheck);
+  const hasAccountClosure = /أغلقنا هذا الحساب|اغلقنا هذا الحساب|تم إغلاق حسابك|تم اغلاق حسابك|تم حظر حسابك|تم تعليق حسابك|إنهاء الحسابات|انهاء الحسابات|رفض الخدمة|إنهاء استخدام خدمات أمازون|انهاء استخدام خدمات امازون|closed this account|account has been closed|account closure|terminate your account|terminated your account|refuse service, terminate accounts|account (?:is|was|has been)?\s*(?:suspended|locked|on hold|closed)/i.test(textToCheck);
 
-  return hasBannedSender || hasDigitalRestriction || hasAccountClosure;
+  return hasDigitalRestriction || hasAccountClosure;
 }
 
 function getBanReason(msg) {
-  if (!msg) return "حساب محظور / مقيد";
-  const textToCheck = [formatAddress(msg.from), msg.subject, msg.intro, msg.text].filter(Boolean).join(' ').toLowerCase();
+  if (!msg) return "حساب مقيد / محظور";
+  const textToCheck = [msg.subject, msg.intro, msg.text].filter(Boolean).join(' ').toLowerCase();
   if (/المشتريات الرقمية|مشتريات رقمية|digital purchases/i.test(textToCheck)) {
     return "مشتريات رقمية فقط";
   }
   if (/أغلقنا هذا الحساب|تم إغلاق|closed this account|إنهاء الحسابات|terminate/i.test(textToCheck)) {
     return "إغلاق وحظر الحساب";
   }
-  if (/ofm@|الموظف المختص|account specialist/i.test(textToCheck)) {
-    return "مراجعة أمنية / OFM";
-  }
   return "حساب مقيد / محظور";
 }
 
 function isAmazonInbox(inbox, messages = null) {
   if (!inbox) return false;
-  // Strictly Official inboxes only!
   if (!isOfficial(inbox)) return false;
-  // Fast path O(1): skip if already classified as Amazon or Banned
-  if (inbox.isAmazon === true || inbox.isBanned === true) return true;
+  if (inbox.isAmazon === true || inbox.isBanned === true || inbox.banStatus === 'confirmed' || inbox.banStatus === 'suspected') return true;
 
-  // Check metadata
   const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
   if (/amazon|أمازون|امازون|إمازون/i.test(meta)) return true;
 
-  // Check messages
   const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
   const inboxEmail = String(inbox.email || '').toLowerCase().trim();
   return allMsgs.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && isAmazonMessage(m));
 }
 
-function isBannedInbox(inbox, messages = null) {
-  if (!inbox) return false;
-  // Strictly Official inboxes only!
-  if (!isOfficial(inbox)) return false;
-  // Fast path O(1): skip if already classified as Banned
-  if (inbox.isBanned === true) return true;
+function isConfirmedBanned(inbox) {
+  if (!inbox || !isOfficial(inbox)) return false;
+  return inbox.banStatus === 'confirmed' || inbox.isBanned === true;
+}
 
-  // Check metadata
-  const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
-  if (/محظور|مقيد|banned|restricted|suspended/i.test(meta)) return true;
+function isSuspectedInbox(inbox, messages = null) {
+  if (!inbox || !isOfficial(inbox)) return false;
+  if (inbox.banStatus === 'safe') return false;
+  if (inbox.banStatus === 'confirmed' || inbox.isBanned === true) return false;
+  if (inbox.banStatus === 'suspected') return true;
 
-  // Check messages
   const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
   const inboxEmail = String(inbox.email || '').toLowerCase().trim();
-  return allMsgs.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && isBannedMessage(m));
+  return allMsgs.some(m => (String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail || formatAddress(m.to).toLowerCase().includes(inboxEmail)) && isBannedMessage(m));
+}
+
+function isBannedInbox(inbox) {
+  return isConfirmedBanned(inbox);
 }
 
 function formatAddress(value) {
