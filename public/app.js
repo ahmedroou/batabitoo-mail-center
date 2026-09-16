@@ -6,6 +6,57 @@ let stopReaderResize = () => {};
 let readerReturnScroll = 0;
 let readerReturnFocus;
 
+const SEEN_KEY = 'batabitoo_seen_inbox_counts';
+let seenCounts = {};
+try {
+  seenCounts = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+} catch (e) {
+  seenCounts = {};
+}
+
+function saveSeenCounts() {
+  try {
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seenCounts));
+  } catch (e) {}
+}
+
+function isInboxUnread(inbox) {
+  if (!inbox || !inbox.id) return false;
+  const count = Number(inbox.messageCount || 0);
+  if (count <= 0) return false;
+  if (inbox.id === state.activeId) return false;
+  const seen = seenCounts[inbox.id];
+  if (seen === undefined) {
+    return count > 0;
+  }
+  return count > Number(seen);
+}
+
+function markInboxAsRead(id, currentCount) {
+  if (!id) return;
+  const all = [...state.official, ...state.temp, ...state.amazon, ...state.banned];
+  const inbox = all.find(i => i.id === id);
+  const count = currentCount !== undefined ? currentCount : (inbox ? Number(inbox.messageCount || 0) : 0);
+  seenCounts[id] = count;
+  saveSeenCounts();
+}
+
+function updateFilterUnreadDots() {
+  const checkList = (arr) => (arr || []).some(isInboxUnread);
+  const officialUnread = checkList(state.official);
+  const tempUnread = checkList(state.temp);
+  const amazonUnread = checkList(state.amazon);
+  const bannedUnread = checkList(state.banned);
+  const anyUnread = officialUnread || tempUnread || amazonUnread || bannedUnread;
+
+  document.querySelector('[data-inbox-type="official"] b')?.classList.toggle('has-unread', officialUnread);
+  document.querySelector('[data-inbox-type="temp"] b')?.classList.toggle('has-unread', tempUnread);
+  document.querySelector('[data-inbox-type="amazon"] b')?.classList.toggle('has-unread', amazonUnread);
+  document.querySelector('[data-inbox-type="banned"] b')?.classList.toggle('has-unread', bannedUnread);
+
+  document.querySelector('[data-mobile-view="inboxes"]')?.classList.toggle('has-unread', anyUnread);
+}
+
 const state = {
   activeId: null,
   activeInbox: null,
@@ -114,7 +165,8 @@ function bindEvents() {
   $('reader-retry-btn')?.addEventListener('click', () => { if (state.currentMessage?.id) openMessage(state.currentMessage.id, false); });
   $('reader-copy-otp-btn')?.addEventListener('click', () => copyText(state.currentMessage?.otp, 'تم نسخ رمز التحقق'));
   $('reader-copy-all-btn')?.addEventListener('click', () => {
-    const text = state.currentMessage?.text || state.currentMessage?.intro || state.currentMessage?.subject || '';
+    const raw = state.currentMessage?.text || state.currentMessage?.intro || state.currentMessage?.subject || '';
+    const text = decodeBase64IfNeeded(raw);
     copyText(text, 'تم نسخ نص الرسالة');
   });
 
@@ -243,6 +295,9 @@ async function loadInboxes() {
   state.amazon = (data.amazon || state.official.filter(i => i.isAmazon)).map(i => ({ ...i, isAmazon: true }));
   state.banned = (data.banned || state.official.filter(i => i.isBanned)).map(i => ({ ...i, isBanned: true, isAmazon: true }));
   state.activeId = data.activeId || state.activeId;
+  if (state.activeId) {
+    markInboxAsRead(state.activeId);
+  }
   $('official-count').textContent = formatNumber(state.official.length);
   $('temp-count').textContent = formatNumber(state.temp.length);
   if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
@@ -265,6 +320,7 @@ async function loadCounts() {
   if ($('amazon-message-count')) $('amazon-message-count').textContent = formatNumber(data.counts?.amazon || state.amazonMessages.length);
   if ($('banned-message-count')) $('banned-message-count').textContent = formatNumber(data.counts?.banned || state.bannedMessages.length);
   $('stat-messages').textContent = formatNumber(data.counts?.total || 0);
+  updateFilterUnreadDots();
 }
 
 async function loadCurrent(silent = false) {
@@ -278,6 +334,9 @@ async function loadCurrent(silent = false) {
       isBanned: isBannedMessage(m),
       isAmazon: isAmazonMessage(m)
     }));
+    if (state.activeId) {
+      markInboxAsRead(state.activeId, state.messages.length);
+    }
     $('current-message-count').textContent = formatNumber(state.messages.length);
     updateActiveInbox();
     renderInboxes();
@@ -317,6 +376,7 @@ function renderInboxes() {
   const source = state.inboxType === 'official' ? state.official : state.inboxType === 'amazon' ? state.amazon : state.inboxType === 'banned' ? state.banned : state.temp;
   const query = normalize($('inbox-search').value);
   const list = query ? source.filter(item => normalize([item.personName, item.label, item.email, item.domain, item.banReason].join(' ')).includes(query)) : source;
+  updateFilterUnreadDots();
   if (!list.length) {
     $('inbox-list').innerHTML = `<div class="empty-state"><div class="empty-icon">@</div><h3>لا توجد صناديق</h3><p>${query ? 'غيّر عبارة البحث وحاول مجددًا.' : 'أنشئ صندوقًا جديدًا للبدء.'}</p></div>`;
     return;
@@ -325,19 +385,24 @@ function renderInboxes() {
     const official = isOfficial(inbox);
     const banned = isBannedInbox(inbox);
     const amazon = isAmazonInbox(inbox);
+    const unread = isInboxUnread(inbox);
     const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
     const id = encodeURIComponent(inbox.id || '');
     const reason = inbox.banReason || 'محظور';
-    return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''}" data-inbox-id="${attr(id)}">
-      <div class="inbox-item-avatar">${banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(label)}</div>
+    return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''} ${unread ? 'has-unread' : ''}" data-inbox-id="${attr(id)}">
+      <div class="inbox-item-avatar">
+        ${banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(label)}
+        ${unread ? '<span class="unread-dot" title="رسائل جديدة غير مقروءة"></span>' : ''}
+      </div>
       <div class="inbox-item-copy">
         <div style="display:flex;align-items:center;gap:6px;">
           <strong>${html(label)}</strong>
+          ${unread ? '<span class="unread-pill" title="رسائل جديدة غير مقروءة">جديد</span>' : ''}
           ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
         </div>
         <span>${html(inbox.email || '')}</span>
       </div>
-      <span class="inbox-count">${formatNumber(inbox.messageCount || 0)}</span>
+      <span class="inbox-count ${unread ? 'unread' : ''}">${formatNumber(inbox.messageCount || 0)}</span>
       <button class="inbox-more" data-delete-id="${attr(id)}" title="حذف الصندوق" aria-label="حذف الصندوق"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg></button>
     </article>`;
   }).join('') + (list.length > inboxLimit ? `<button class="load-more" data-load-more>عرض المزيد · ${formatNumber(list.length - inboxLimit)} صندوق متبقٍ</button>` : '');
@@ -371,6 +436,7 @@ function updateActiveInbox() {
 
 async function selectInbox(id) {
   state.activeId = id;
+  markInboxAsRead(id);
   renderInboxes();
   try {
     await api('/api/inboxes/select', {
@@ -379,6 +445,8 @@ async function selectInbox(id) {
       body: JSON.stringify({ id })
     });
     await loadCurrent(true);
+    markInboxAsRead(id, state.messages.length);
+    renderInboxes();
     switchContentView('current');
     if (innerWidth <= 720) {
       document.querySelector('.workspace').classList.add('show-content');
@@ -512,7 +580,8 @@ async function openMessage(id, pushHistory = true) {
     $('reader-to').textContent = recipient;
     $('reader-date').textContent = formatDate(message.createdAt, true);
     $('reader-avatar').textContent = initials(sender);
-    $('reader-copy-all-btn').disabled = !message.text;
+    const cleanText = decodeBase64IfNeeded(message.text || '');
+    $('reader-copy-all-btn').disabled = !cleanText;
     $('reader-subject').focus({ preventScroll: true });
     if (message.bodyStatus === 'unavailable') {
       $('reader-notice').textContent = 'النسخة المحفوظة لهذه الرسالة ناقصة من المصدر؛ لا يتوفر محتواها الأصلي لعرضه.';
@@ -527,6 +596,11 @@ async function openMessage(id, pushHistory = true) {
       $('reader-otp-banner')?.classList.remove('hidden');
     } else {
       $('reader-otp-banner')?.classList.add('hidden');
+    }
+
+    let effectiveHtml = message.html;
+    if (!hasVisibleContent(effectiveHtml)) {
+      effectiveHtml = cleanText ? plainDocument(cleanText) : plainDocument('لا يوجد محتوى متوفر لهذه الرسالة.');
     }
 
     if (frame) {
@@ -556,7 +630,7 @@ async function openMessage(id, pushHistory = true) {
         document.querySelector('.reader-content-card').setAttribute('aria-busy', 'false');
         $('reader-content-status').textContent = ' ';
       };
-      frame.srcdoc = message.html || plainDocument(message.text || 'لا يوجد محتوى للرسالة.');
+      frame.srcdoc = effectiveHtml;
     }
   } catch (error) {
     if (request !== readerRequest) return;
@@ -659,6 +733,10 @@ async function deleteInbox() {
     await api(`/api/inboxes/${encodeURIComponent(id)}`, { method: 'DELETE' });
     $('confirm-delete').classList.add('hidden');
     state.pendingDeleteId = null;
+    if (seenCounts[id] !== undefined) {
+      delete seenCounts[id];
+      saveSeenCounts();
+    }
     await loadInboxes();
     await loadCurrent(true);
     await loadStatus();
@@ -894,5 +972,77 @@ function formatDate(value, long = false) {
 function html(value) { return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 function attr(value) { return html(value); }
 function friendlyError(error) { return error?.name === 'AbortError' ? 'انتهت مهلة الاتصال بالخادم' : (error?.message || 'حدث خطأ غير متوقع'); }
-function plainDocument(text) { return `<!doctype html><html dir="auto"><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;line-height:1.85;padding:24px;color:#172337;white-space:pre-wrap}a{color:#0789ae}</style><body>${html(text)}</body></html>`; }
+function decodeBase64IfNeeded(str) {
+  if (!str || typeof str !== 'string') return '';
+  const trimmed = str.trim();
+  if (trimmed.length > 20 && /^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+    try {
+      const clean = trimmed.replace(/\s+/g, '');
+      const binary = atob(clean);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const decoded = new TextDecoder('utf-8').decode(bytes);
+      if (decoded && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded) && /[\u0600-\u06FF\w]/.test(decoded)) {
+        return decoded;
+      }
+    } catch (e) {}
+  }
+  return str;
+}
+
+function hasVisibleContent(htmlStr) {
+  if (!htmlStr || typeof htmlStr !== 'string') return false;
+  const hasMedia = /<img\s[^>]*src=|<table|<button/i.test(htmlStr);
+  const bodyMatch = htmlStr.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const content = bodyMatch ? bodyMatch[1] : htmlStr;
+  const textOnly = content.replace(/<style[\s\S]*?<\/style>/gi, '')
+                          .replace(/<script[\s\S]*?<\/script>/gi, '')
+                          .replace(/<head[\s\S]*?<\/head>/gi, '')
+                          .replace(/<title[\s\S]*?<\/title>/gi, '')
+                          .replace(/<[^>]+>/g, '')
+                          .replace(/&[a-z0-9#]+;/gi, ' ')
+                          .trim();
+  if (hasMedia) return true;
+  return textOnly.length >= 10;
+}
+
+function plainDocument(rawText) {
+  const text = decodeBase64IfNeeded(rawText || '');
+  let safe = html(text);
+
+  // Convert "Action Title (https://...)" into handsome action buttons
+  const actionRegex = /([^()\n]{2,40})\s*\((https?:\/\/[^\s)]+)\)/g;
+  safe = safe.replace(actionRegex, (_, label, url) => {
+    const isDanger = /إلغاء|حظر|حذف|إغلاق|delete|cancel|close/i.test(label);
+    const bg = isDanger ? '#ef4444' : '#ff9900';
+    const color = isDanger ? '#ffffff' : '#111827';
+    return `<div style="margin: 14px 0;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 12px 24px; background: ${bg}; color: ${color}; font-weight: bold; text-decoration: none; border-radius: 12px; font-size: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.08);">${label.trim()}</a></div>`;
+  });
+
+  // Auto-link remaining bare URLs
+  safe = safe.replace(/(^|[^"'])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; word-break: break-all;">$2</a>');
+
+  return `<!doctype html>
+<html dir="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Cairo", Helvetica, Arial, sans-serif;
+      line-height: 1.8;
+      padding: 24px 20px;
+      color: #1e293b;
+      background: #ffffff;
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body dir="auto">${safe}</body>
+</html>`;
+}
 function loadingDocument() { return '<!doctype html><style>body{margin:0;background:#f6f9fc}div{width:55%;height:14px;margin:50px auto;border-radius:8px;background:#dce6ef;box-shadow:0 28px #e5edf4,0 56px #e5edf4;animation:p 1s infinite alternate}@keyframes p{to{opacity:.35}}</style><div></div>'; }

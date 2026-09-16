@@ -38,7 +38,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.batabitoo.mailcenter.data.ContentSanitizer
 import com.batabitoo.mailcenter.data.MailMessage
+import com.batabitoo.mailcenter.data.SenderFormatter
 import com.batabitoo.mailcenter.ui.theme.*
 import java.time.Instant
 import java.time.ZoneId
@@ -114,8 +116,9 @@ fun EmailReader(
                         color = Ink,
                         modifier = Modifier.weight(1f),
                     )
-                    if (message.text.isNotBlank()) {
-                        IconButton(onClick = { copy(message.text, "تم نسخ نص الرسالة") }) {
+                    val cleanText = remember(message.text) { ContentSanitizer.decodeBase64Text(message.text) }
+                    if (cleanText.isNotBlank()) {
+                        IconButton(onClick = { copy(cleanText, "تم نسخ نص الرسالة") }) {
                             Icon(
                                 Icons.Rounded.ContentCopy,
                                 contentDescription = "نسخ النص",
@@ -508,9 +511,9 @@ private fun MailDocument(
  */
 private fun prepareGmailHtml(html: String, text: String): String {
     val cleanHtml = html.trim()
-    val cleanText = text.trim()
+    val cleanText = ContentSanitizer.decodeBase64Text(text.trim())
 
-    val isBlankContent = cleanHtml.isBlank() ||
+    val isBlankContent = !ContentSanitizer.hasVisibleContent(cleanHtml) ||
         cleanHtml.contains("لم يتوفر محتوى الرسالة من المصدر") ||
         cleanHtml == "<!doctype html><html dir=\"auto\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><body style=\"margin:0;padding:20px;font:16px/1.8 sans-serif;white-space:pre-wrap;overflow-wrap:anywhere\">لم يتوفر محتوى الرسالة من المصدر.</body></html>"
 
@@ -580,16 +583,29 @@ private fun prepareGmailHtml(html: String, text: String): String {
 }
 
 private fun formatPlainTextAsHtml(text: String): String {
-    val escaped = text
+    val decoded = ContentSanitizer.decodeBase64Text(text)
+    var escaped = decoded
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
 
-    // Auto-link URLs
+    // Action Title (https://...) buttons
+    val actionRegex = Regex("""([^()\n]{2,40})\s*\((https?://[^\s)]+)\)""")
+    escaped = actionRegex.replace(escaped) { matchResult ->
+        val label = matchResult.groupValues[1].trim()
+        val url = matchResult.groupValues[2].trim()
+        val isDanger = label.contains("إلغاء") || label.contains("حظر") || label.contains("حذف") || label.contains("إغلاق") ||
+                label.contains("delete", ignoreCase = true) || label.contains("cancel", ignoreCase = true) || label.contains("close", ignoreCase = true)
+        val bg = if (isDanger) "#ef4444" else "#ff9900"
+        val textColor = if (isDanger) "#ffffff" else "#111827"
+        """<div style="margin: 14px 0;"><a href="$url" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 12px 24px; background: $bg; color: $textColor; font-weight: bold; text-decoration: none; border-radius: 12px; font-size: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.08);">$label</a></div>"""
+    }
+
+    // Auto-link remaining bare URLs
     val linked = escaped.replace(
-        Regex("""(https?://[^\s<]+)""", RegexOption.IGNORE_CASE),
-        """<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>"""
+        Regex("""(^|[^"'])(https?://[^\s<)]+)""", RegexOption.IGNORE_CASE),
+        """$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; word-break: break-all;">$2</a>"""
     )
 
     return """
@@ -599,20 +615,21 @@ private fun formatPlainTextAsHtml(text: String): String {
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
             <style>
+                *, *::before, *::after { box-sizing: border-box; }
                 body {
                     margin: 0;
-                    padding: 16px 14px;
+                    padding: 20px 16px;
                     background-color: #ffffff;
-                    color: #202124;
+                    color: #1f2937;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Cairo", Helvetica, Arial, sans-serif;
                     font-size: 15px;
-                    line-height: 1.7;
+                    line-height: 1.8;
                     white-space: pre-wrap;
                     overflow-wrap: break-word;
                     word-break: normal;
                 }
                 a {
-                    color: #1a73e8;
+                    color: #2563eb;
                     text-decoration: underline;
                 }
             </style>

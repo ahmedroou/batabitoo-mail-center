@@ -152,6 +152,22 @@ function readBody(message) {
   }
 }
 
+function hasVisibleContent(htmlStr) {
+  if (!htmlStr || typeof htmlStr !== 'string') return false;
+  const hasMedia = /<img\s[^>]*src=|<table|<button/i.test(htmlStr);
+  const bodyMatch = htmlStr.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const content = bodyMatch ? bodyMatch[1] : htmlStr;
+  const textOnly = content.replace(/<style[\s\S]*?<\/style>/gi, '')
+                          .replace(/<script[\s\S]*?<\/script>/gi, '')
+                          .replace(/<head[\s\S]*?<\/head>/gi, '')
+                          .replace(/<title[\s\S]*?<\/title>/gi, '')
+                          .replace(/<[^>]+>/g, '')
+                          .replace(/&[a-z0-9#]+;/gi, ' ')
+                          .trim();
+  if (hasMedia) return true;
+  return textOnly.length >= 10;
+}
+
 function render(message, suppliedBody) {
   let html = '';
   let attachments = [];
@@ -164,10 +180,15 @@ function render(message, suppliedBody) {
     attachments = message.attachments || [];
   }
 
-  if (!html && message.text) {
-    html = parser.formatPlainTextToHtml(message.text);
+  let rawText = '';
+  try { rawText = (suppliedBody || readBody(message)).text || message.text || ''; } catch { rawText = message.text || ''; }
+  const cleanText = parser.cleanPlainText(rawText);
+
+  // If HTML is empty OR has no visible text/elements, fallback to clean text
+  if (!hasVisibleContent(html) && cleanText) {
+    html = parser.formatPlainTextToHtml(cleanText);
   }
-  if (!html) {
+  if (!hasVisibleContent(html)) {
     html = parser.formatPlainTextToHtml(missingText);
   }
 
@@ -254,10 +275,13 @@ function summary(message) {
 
 function detail(message) {
   const rendered = render(message);
+  let rawText = '';
+  try { rawText = readBody(message).text || message.text || ''; } catch { rawText = message.text || ''; }
+  const cleanText = parser.cleanPlainText(rawText);
   return {
     ...summary(message),
     html: rendered,
-    text: readBody(message).text || message.text || ''
+    text: cleanText
   };
 }
 

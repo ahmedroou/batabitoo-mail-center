@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/styles.css?v=8">
   <link rel="stylesheet" href="/reader.css?v=1">
 </head>
 <body>
@@ -27,6 +27,7 @@
       </div>
       <div class="topbar-actions">
         <div class="connection-pill" id="connection-pill"><span class="status-dot"></span><span id="connection-text">جاري الاتصال</span></div>
+        <button class="amazon-hub-pill" id="open-amazon-hub-btn" type="button" title="مركز أمازون المتكامل"><span class="hub-icon">🛒</span><span>مركز أمازون</span><b id="amazon-nav-count">0</b></button>
         <button class="icon-button" id="refresh-all" aria-label="تحديث الكل" title="تحديث الكل"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg></button>
         <button class="primary-button" id="new-inbox-top"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>صندوق جديد</span></button>
       </div>
@@ -36,7 +37,7 @@
       <article class="stat-card stat-main"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>كل الصناديق</span><strong id="stat-total">—</strong></div><small id="stat-sync">مزامنة آمنة</small></article>
       <article class="stat-card"><div class="stat-icon gold"><svg viewBox="0 0 24 24"><path d="m5 16-1-9 5 4 3-6 3 6 5-4-1 9zM6 19h12"/></svg></div><div><span>الرسمي</span><strong id="stat-official">—</strong></div></article>
       <article class="stat-card"><div class="stat-icon cyan"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg></div><div><span>السريع</span><strong id="stat-temp">—</strong></div></article>
-      <article class="stat-card"><div class="stat-icon amazon-stat"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg></div><div><span>أمازون</span><strong id="stat-amazon">—</strong></div></article>
+      <article class="stat-card stat-clickable" id="stat-amazon-card" role="button" tabindex="0" title="فتح مركز أمازون"><div class="stat-icon amazon-stat"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg></div><div><span>أمازون</span><strong id="stat-amazon">—</strong></div></article>
       <article class="stat-card"><div class="stat-icon banned-stat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></div><div><span>المحظور</span><strong id="stat-banned">—</strong></div></article>
       <article class="stat-card"><div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>الرسائل</span><strong id="stat-messages">—</strong></div></article>
     </section>
@@ -44,7 +45,7 @@
     <main class="workspace">
       <aside class="sidebar" id="sidebar">
         <div class="panel-heading"><div><span class="section-kicker">حساباتك</span><h2>صناديق البريد</h2></div><button class="mini-add" id="new-inbox-side" aria-label="إضافة صندوق"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
-        <div class="segmented" id="inbox-filter"><button class="active" data-inbox-type="official"><span>رسمي</span><b id="official-count">0</b></button><button data-inbox-type="temp"><span>سريع</span><b id="temp-count">0</b></button><button data-inbox-type="amazon"><span>أمازون</span><b id="amazon-count">0</b></button><button data-inbox-type="banned"><span>محظور</span><b id="banned-count">0</b></button></div>
+        <div class="segmented" id="inbox-filter"><button class="active" data-inbox-type="official"><span>رسمي</span><b id="official-count">0</b></button><button data-inbox-type="temp"><span>سريع</span><b id="temp-count">0</b></button><button data-inbox-type="amazon" class="amazon-choice"><span>🛒 أمازون</span><b id="amazon-count">0</b></button><button data-inbox-type="banned"><span>محظور</span><b id="banned-count">0</b></button></div>
         <label class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="inbox-search" type="search" placeholder="ابحث عن صندوق"></label>
         <div class="inbox-list" id="inbox-list"><div class="skeleton-list"></div></div>
       </aside>
@@ -58,21 +59,80 @@
           <div class="active-identity"><div class="inbox-avatar" id="active-avatar">@</div><div class="active-copy"><div class="active-meta"><span id="active-badge">الصندوق الحالي</span><i id="active-host"></i></div><h2 id="active-email">اختر صندوق بريد</h2></div></div>
           <div class="active-actions"><button class="soft-button" id="copy-email" disabled><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>نسخ البريد</span></button><button class="soft-button accent" id="refresh-current"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg><span>تحديث الوارد</span></button></div>
         </div>
+        
         <div class="feed-shell" id="feed-shell">
-          <div class="content-tabs" id="content-tabs"><button class="active" data-view="current">الوارد <b id="current-message-count">0</b></button><button data-view="amazon">أمازون <b id="amazon-message-count">0</b></button><button data-view="banned">محظور <b id="banned-message-count">0</b></button><button data-view="official">رسمي <b id="official-message-count">0</b></button><button data-view="temp">سريع <b id="temp-message-count">0</b></button><button data-view="logs">السجل <b id="logs-count">0</b></button></div>
+          <div class="content-tabs" id="content-tabs"><button class="active" data-view="current">الوارد <b id="current-message-count">0</b></button><button data-view="amazon" class="amazon-tab">🛒 أمازون <b id="amazon-message-count">0</b></button><button data-view="banned">محظور <b id="banned-message-count">0</b></button><button data-view="official">رسمي <b id="official-message-count">0</b></button><button data-view="temp">سريع <b id="temp-message-count">0</b></button><button data-view="logs">السجل <b id="logs-count">0</b></button></div>
           <div class="list-toolbar"><div><span class="section-kicker" id="view-kicker">البريد الوارد</span><h2 id="view-title">أحدث الرسائل</h2></div><label class="search-box compact"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="content-search" type="search" placeholder="بحث في الرسائل"></label></div>
           <div class="message-list" id="message-list"><div class="skeleton-list wide"></div></div>
           <div class="empty-state hidden" id="empty-state"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><h3>الوارد هادئ الآن</h3><p>ستظهر الرسائل الجديدة هنا فور وصولها.</p></div>
         </div>
 
+        <!-- Dedicated Amazon Hub Section -->
+        <section class="amazon-hub-shell hidden" id="amazon-hub-shell" aria-label="مركز إدارة رسائل وحسابات أمازون">
+          <div class="amazon-hub-hero">
+            <div class="amazon-hero-main">
+              <div class="amazon-brand-badge"><span class="amazon-cart-icon">🛒</span><span>مركز أمازون المتكامل</span></div>
+              <h2>مركز رسائل ورموز وحسابات أمازون</h2>
+              <p>لوحة تحكم مركزية لاستخراج أكواد التحقق (OTP)، إدارة حسابات ahmedroou، ومراقبة تنبيهات الحظر والتقييد.</p>
+              <div class="amazon-hero-actions">
+                <button class="primary-button amazon-create-btn" id="amazon-quick-create-btn" type="button">
+                  <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+                  <span>إنشاء حساب تتابعي فوري (<b id="amazon-seq-name">ahmedroou</b>)</span>
+                </button>
+                <button class="soft-button" id="amazon-copy-active-btn" type="button">
+                  <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+                  <span>نسخ البريد النشط</span>
+                </button>
+                <button class="soft-button" id="amazon-refresh-btn" type="button">
+                  <svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg>
+                  <span>تحديث أمازون</span>
+                </button>
+              </div>
+            </div>
+            <div class="amazon-hero-stats">
+              <div class="amazon-stat-tile"><span>حسابات أمازون</span><strong id="amazon-stat-inboxes">0</strong></div>
+              <div class="amazon-stat-tile"><span>رسائل أمازون</span><strong id="amazon-stat-messages">0</strong></div>
+              <div class="amazon-stat-tile highlight-gold"><span>أكواد التحقق</span><strong id="amazon-stat-otps">0</strong></div>
+              <div class="amazon-stat-tile highlight-red"><span>محظورة / مقيدة</span><strong id="amazon-stat-banned">0</strong></div>
+            </div>
+          </div>
+
+          <div class="amazon-feed-container">
+            <div class="amazon-filters-bar">
+              <div class="amazon-sub-tabs" id="amazon-sub-tabs">
+                <button class="active" data-amazon-filter="all"><span>كل رسائل أمازون</span><b id="amz-tab-all-count">0</b></button>
+                <button data-amazon-filter="otp"><span class="tab-emoji">⚡</span><span>أكواد التحقق (OTP)</span><b id="amz-tab-otp-count">0</b></button>
+                <button data-amazon-filter="banned"><span class="tab-emoji">⛔</span><span>المحظور والمقيد</span><b id="amz-tab-banned-count">0</b></button>
+                <button data-amazon-filter="orders"><span class="tab-emoji">📦</span><span>الطلبات والشحنات</span><b id="amz-tab-orders-count">0</b></button>
+              </div>
+              <label class="search-box compact"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="amazon-search" type="search" placeholder="بحث في رسائل أمازون…"></label>
+            </div>
+
+            <div class="amazon-inboxes-reel" id="amazon-inboxes-reel"></div>
+
+            <div class="message-list amazon-message-stream" id="amazon-message-list">
+              <div class="skeleton-list wide"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Professional Dedicated Message Reader -->
         <section class="reader-shell hidden" id="reader-shell" aria-label="عرض الرسالة الكاملة">
           <div class="reader-navbar">
-            <button class="reader-back-btn" id="reader-back-btn" type="button" aria-label="الرجوع للرسائل">
-              <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
-              <span>الرجوع للرسائل</span>
-            </button>
+            <div class="reader-nav-left">
+              <button class="reader-back-btn" id="reader-back-btn" type="button" aria-label="الرجوع للرسائل">
+                <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+                <span>الرجوع للرسائل</span>
+              </button>
+              <div class="reader-nav-arrows">
+                <button class="reader-tool" id="reader-prev-btn" type="button" title="الرسالة السابقة"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button>
+                <span class="reader-counter" id="reader-counter">1 / 1</span>
+                <button class="reader-tool" id="reader-next-btn" type="button" title="الرسالة التالية"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+              </div>
+            </div>
             <div class="reader-actions">
-              <button class="reader-tool" id="reader-retry-btn" type="button" aria-label="إعادة تحميل الرسالة"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg></button>
+              <button class="reader-tool" id="reader-print-btn" type="button" title="طباعة الرسالة"><svg viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg></button>
+              <button class="reader-tool" id="reader-retry-btn" type="button" aria-label="إعادة تحميل الرسالة" title="إعادة تحميل"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg></button>
               <button class="soft-button" id="reader-copy-all-btn" type="button" title="نسخ نص الرسالة">
                 <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
                 <span>نسخ النص</span>
@@ -82,8 +142,20 @@
 
           <article class="reader-header-card">
             <div class="reader-title-area">
-              <span class="reader-tag">رسالة واردة</span>
+              <div class="reader-tag-row">
+                <span class="reader-tag" id="reader-tag">رسالة واردة</span>
+                <span class="reader-brand-pill hidden" id="reader-brand-pill"></span>
+              </div>
               <h1 class="reader-subject" id="reader-subject" tabindex="-1">—</h1>
+            </div>
+
+            <!-- Banned / Restriction Alert Callout -->
+            <div class="reader-ban-alert hidden" id="reader-ban-alert">
+              <div class="ban-alert-icon">⛔</div>
+              <div class="ban-alert-copy">
+                <strong id="reader-ban-title">تنبيه تقييد الحساب من أمازون</strong>
+                <p id="reader-ban-desc">رسالة صادرة من فريق أمازون تشير إلى تطبيق قيود أو مراجعة الحساب.</p>
+              </div>
             </div>
 
             <details class="reader-envelope" open><summary>تفاصيل المرسل والمستلم</summary><div class="reader-meta-grid">
@@ -108,6 +180,7 @@
               </div>
             </div></details>
 
+            <!-- Hero OTP Box -->
             <div class="reader-otp-banner hidden" id="reader-otp-banner">
               <div class="otp-banner-left">
                 <span class="otp-badge-title">⚡ كود التحقق السريع (OTP)</span>
@@ -123,7 +196,7 @@
           <div class="reader-notice hidden" id="reader-notice" role="status"></div>
           <section class="reader-attachments hidden" id="reader-attachments" aria-label="مرفقات الرسالة"></section>
           <div class="reader-content-card" aria-busy="true">
-            <div class="reader-paper-label"><span>محتوى الرسالة</span><span id="reader-content-status" role="status">جاري التحميل…</span></div>
+            <div class="reader-paper-label"><span>محتوى الرسالة الكامل</span><span id="reader-content-status" role="status">جاري التحميل…</span></div>
             <iframe id="reader-frame" title="محتوى الرسالة الكامل" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
           </div>
         </section>
@@ -144,6 +217,6 @@
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=8" defer></script>
+  <script src="/app.js?v=10" defer></script>
 </body>
 </html>

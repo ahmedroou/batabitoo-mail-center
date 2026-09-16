@@ -328,4 +328,57 @@ class MailJsonTest {
         val info3 = MailJson.firestoreAppVersion(firestoreRaw, currentVersionCode = 3)
         assertFalse(info3.hasUpdate)
     }
+
+    @Test
+    fun contentSanitizer_decodesBase64AndRfc2047() {
+        // Amazon sample base64 string
+        val b64 = "CiAgCgrZhdix2K3YqNin2IwgCiAgCiAg2YbYr9i52YjZgyDYpdmE2Ykg2KrYo9mD2YrYryDYpdmE2YTYp9mC"
+        val decoded = com.batabitoo.mailcenter.data.ContentSanitizer.decodeBase64Text(b64)
+        assertTrue(decoded.contains("مرحبا"))
+        assertTrue(decoded.contains("ندعوك إلى تأكيد"))
+
+        // RFC 2047 Base64
+        val rfc = "=?UTF-8?B?2KPZhdin2LLZiNmG?="
+        val decodedRfc = com.batabitoo.mailcenter.data.ContentSanitizer.decodeRfc2047(rfc)
+        assertEquals("أمازون", decodedRfc)
+
+        // RFC 2047 Q-encoding
+        val rfcQ = "=?UTF-8?Q?Amazon_Support?="
+        val decodedRfcQ = com.batabitoo.mailcenter.data.ContentSanitizer.decodeRfc2047(rfcQ)
+        assertEquals("Amazon Support", decodedRfcQ)
+    }
+
+    @Test
+    fun contentSanitizer_detectsVisibleContentAccurately() {
+        // Empty / whitespace
+        assertFalse(com.batabitoo.mailcenter.data.ContentSanitizer.hasVisibleContent(""))
+        assertFalse(com.batabitoo.mailcenter.data.ContentSanitizer.hasVisibleContent("   "))
+
+        // Broken HTML shell (Amazon shell with empty body/title)
+        val brokenShell = """<!doctype html><html lang="ar"><head><title></title><meta charset="utf-8"></head><body dir="auto"><!</body></html>"""
+        assertFalse(com.batabitoo.mailcenter.data.ContentSanitizer.hasVisibleContent(brokenShell))
+
+        // Legitimate HTML with text
+        val legit = """<!doctype html><html><body><p>مرحباً بك في أمازون السعودية، شكراً لتسوقك معنا</p></body></html>"""
+        assertTrue(com.batabitoo.mailcenter.data.ContentSanitizer.hasVisibleContent(legit))
+
+        // Legitimate HTML with image
+        val imgHtml = """<div><img src="https://example.com/logo.png" /></div>"""
+        assertTrue(com.batabitoo.mailcenter.data.ContentSanitizer.hasVisibleContent(imgHtml))
+    }
+
+    @Test
+    fun senderFormatter_cleansTechnicalAndBouncedSenders() {
+        val saSes = com.batabitoo.mailcenter.data.SenderFormatter.format(
+            "010201994a5a54ec-a7b53805-7f55-46ff-b633-85bba438f6b9-000000@eu-west-1.amazonses.com",
+            subject = "يلزم التأكيد لإغلاق حساب أمازون"
+        )
+        assertEquals("أمازون السعودية (Amazon.sa)", saSes)
+
+        val friendlyAmz = com.batabitoo.mailcenter.data.SenderFormatter.format(
+            "\"Amazon.sa\" <auto-confirm@amazon.sa>",
+            subject = "طلبك"
+        )
+        assertEquals("Amazon.sa", friendlyAmz)
+    }
 }

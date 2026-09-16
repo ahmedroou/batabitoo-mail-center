@@ -148,12 +148,27 @@ function stripTransportHeaders(str) {
   return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function decodeBase64Text(str) {
+  if (!str || typeof str !== 'string') return '';
+  const clean = str.trim();
+  if (clean.length > 20 && /^[A-Za-z0-9+/=\r\n]+$/.test(clean)) {
+    try {
+      const decoded = Buffer.from(clean.replace(/\s+/g, ''), 'base64').toString('utf8');
+      if (decoded && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded) && /[\u0600-\u06FF\w]/.test(decoded)) {
+        return decoded;
+      }
+    } catch (e) {}
+  }
+  return str;
+}
+
 function cleanPlainText(value) {
   if (!value || typeof value !== 'string') return '';
   let text = value.replace(/\r\n/g, '\n');
   if (text.includes('=D8=') || text.includes('=D9=') || text.includes('=\n')) {
     text = decodeQuotedPrintable(text);
   }
+  text = decodeBase64Text(text);
   text = stripTransportHeaders(text);
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
@@ -181,8 +196,22 @@ function extractOtp(text, subject) {
   return null;
 }
 
-function formatPlainTextToHtml(text) {
-  const safe = escape(cleanPlainText(text));
+function formatPlainTextToHtml(rawText) {
+  const text = cleanPlainText(rawText);
+  let safe = escape(text);
+
+  // Convert "Action Title (https://...)" into handsome action buttons
+  const actionRegex = /([^()\n]{2,40})\s*\((https?:\/\/[^\s)]+)\)/g;
+  safe = safe.replace(actionRegex, (_, label, url) => {
+    const isDanger = /إلغاء|حظر|حذف|إغلاق|delete|cancel|close/i.test(label);
+    const bg = isDanger ? '#ef4444' : '#ff9900';
+    const color = isDanger ? '#ffffff' : '#111827';
+    return `<div style="margin: 12px 0;"><a href="${url}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 10px 20px; background: ${bg}; color: ${color}; font-weight: bold; text-decoration: none; border-radius: 10px; font-size: 14px;">${label.trim()}</a></div>`;
+  });
+
+  // Auto-link remaining bare URLs
+  safe = safe.replace(/(^|[^"'])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; word-break: break-all;">$2</a>');
+
   return `<div dir="auto" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Cairo', Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.8; color: #182032; white-space: pre-wrap; overflow-wrap: anywhere; padding: 20px 16px;">${safe}</div>`;
 }
 
@@ -254,6 +283,7 @@ module.exports = {
   stripTransportHeaders,
   stripHtmlTags,
   formatPlainTextToHtml,
+  decodeBase64Text,
   formatAddress,
   cleanSenderName,
   looksLikeMime,

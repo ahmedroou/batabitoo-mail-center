@@ -558,7 +558,17 @@ svg {
   border-color: rgba(99, 102, 241, 0.2);
 }
 
+.inbox-item.has-unread {
+  background: rgba(254, 242, 242, 0.45);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.inbox-item.has-unread:hover {
+  background: rgba(254, 242, 242, 0.75);
+}
+
 .inbox-item-avatar {
+  position: relative;
   width: 40px;
   height: 40px;
   display: grid;
@@ -568,6 +578,46 @@ svg {
   background: var(--accent-light);
   font-size: 13px;
   font-weight: 800;
+}
+
+.unread-dot {
+  position: absolute;
+  top: -2px;
+  inset-inline-end: -2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+  animation: redPulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.unread-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.4;
+  letter-spacing: -0.2px;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  box-shadow: 0 1px 3px rgba(239, 68, 68, 0.12);
+  flex-shrink: 0;
+}
+
+.unread-pill::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ef4444;
 }
 
 .inbox-item.official .inbox-item-avatar {
@@ -612,6 +662,37 @@ svg {
   background: rgba(99, 102, 241, 0.1);
   font-size: 11px;
   font-weight: 800;
+  transition: all 0.2s ease;
+}
+
+.inbox-count.unread {
+  background: #ef4444;
+  color: #ffffff;
+  font-weight: 900;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.35);
+}
+
+.segmented b.has-unread, .content-tabs b.has-unread {
+  background: #ef4444;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.35);
+}
+
+.mobile-nav button.has-unread {
+  position: relative;
+}
+
+.mobile-nav button.has-unread::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 8px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 1.5px solid var(--surface);
+  animation: redPulse 1.8s infinite;
 }
 
 .inbox-more {
@@ -1853,6 +1934,12 @@ svg {
   0% { box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.4); }
   70% { box-shadow: 0 0 0 8px rgba(5, 150, 105, 0); }
   100% { box-shadow: 0 0 0 0 rgba(5, 150, 105, 0); }
+}
+
+@keyframes redPulse {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+  70% { box-shadow: 0 0 0 7px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
 @keyframes shimmer {

@@ -195,9 +195,79 @@ object AmazonBannedDetector {
     }
 }
 
+object ContentSanitizer {
+    fun decodeBase64Safe(input: String): ByteArray {
+        val clean = input.replace(Regex("""\s+"""), "")
+        return try {
+            java.util.Base64.getDecoder().decode(clean)
+        } catch (_: Throwable) {
+            android.util.Base64.decode(clean, android.util.Base64.DEFAULT)
+        }
+    }
+
+    fun decodeRfc2047(str: String): String {
+        val pattern = Regex("""=\?([^?]+)\?([bBqQ])\?([^?]*)\?=""", RegexOption.IGNORE_CASE)
+        return pattern.replace(str) { match ->
+            val encoding = match.groupValues[2].uppercase()
+            val content = match.groupValues[3]
+            try {
+                if (encoding == "B") {
+                    val bytes = decodeBase64Safe(content)
+                    String(bytes, Charsets.UTF_8)
+                } else if (encoding == "Q") {
+                    content.replace('_', ' ')
+                } else {
+                    match.value
+                }
+            } catch (_: Throwable) {
+                match.value
+            }
+        }
+    }
+
+    fun decodeBase64Text(str: String): String {
+        if (str.isBlank()) return ""
+        val trimmed = str.trim()
+        val clean = trimmed.replace(Regex("""\s+"""), "")
+        if (clean.length > 20 && clean.matches(Regex("""^[A-Za-z0-9+/=]+$"""))) {
+            try {
+                val bytes = decodeBase64Safe(clean)
+                val decoded = String(bytes, Charsets.UTF_8)
+                val hasControlChars = decoded.any { it.code in 0..8 || it.code in 11..12 || it.code in 14..31 }
+                val hasLettersOrArabic = decoded.any { it in '\u0600'..'\u06FF' || it.isLetterOrDigit() }
+                if (!hasControlChars && hasLettersOrArabic) {
+                    return decoded
+                }
+            } catch (_: Throwable) {}
+        }
+        return str
+    }
+
+    fun hasVisibleContent(htmlStr: String): Boolean {
+        if (htmlStr.isBlank()) return false
+        val hasMedia = htmlStr.contains("<img", ignoreCase = true) ||
+                htmlStr.contains("<table", ignoreCase = true) ||
+                htmlStr.contains("<button", ignoreCase = true)
+        if (hasMedia) return true
+
+        val bodyMatch = Regex("""<body[^>]*>([\s\S]*?)</body>""", RegexOption.IGNORE_CASE).find(htmlStr)
+        val content = bodyMatch?.groupValues?.get(1) ?: htmlStr
+        val textOnly = content
+            .replace(Regex("""<style[\s\S]*?</style>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<script[\s\S]*?</script>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<head[\s\S]*?</head>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<title[\s\S]*?</title>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""<[^>]+>"""), "")
+            .replace(Regex("""&[a-z0-9#]+;""", RegexOption.IGNORE_CASE), " ")
+            .trim()
+
+        return textOnly.length >= 10
+    }
+}
+
 object SenderFormatter {
     fun format(rawFrom: String, subject: String = ""): String {
-        var str = rawFrom.trim()
+        var str = ContentSanitizer.decodeRfc2047(rawFrom.trim())
         if (str.isBlank()) return "مرسل غير معروف"
 
         val match = Regex("""^["']?([^"<]+?)["']?\s*<([^>]+)>""").find(str)
@@ -213,7 +283,7 @@ object SenderFormatter {
         str = str.removePrefix("<").removeSuffix(">").trim()
 
         val lower = str.lowercase()
-        if (lower.contains("@bounces.amazon.") || lower.contains("@amazon.") || lower.contains("amazon.sa") || lower.contains("amazon.ca") || lower.contains("amazon.ae")) {
+        if (lower.contains("@bounces.amazon.") || lower.contains("@amazon.") || lower.contains("amazonses.com") || lower.contains("amazon.sa") || lower.contains("amazon.ca") || lower.contains("amazon.ae")) {
             val isSa = lower.contains("amazon.sa") || subject.contains(Regex("""[\u0600-\u06FF]"""))
             val isCa = lower.contains("amazon.ca")
             val isAe = lower.contains("amazon.ae")
@@ -401,12 +471,14 @@ object MailJson {
 
     private fun message(item: JSONObject): MailMessage {
         val rawFrom = address(item.opt("from"))
-        val subject = item.optString("subject", "(بدون عنوان)")
+        val subject = ContentSanitizer.decodeRfc2047(item.optString("subject", "(بدون عنوان)"))
         val from = SenderFormatter.format(rawFrom, subject)
         val to = address(item.opt("to"))
         val inboxEmail = item.optString("inboxEmail")
-        val intro = item.optString("intro")
-        val text = item.optString("text")
+        val rawIntro = item.optString("intro")
+        val intro = ContentSanitizer.decodeBase64Text(rawIntro)
+        val rawText = item.optString("text")
+        val text = ContentSanitizer.decodeBase64Text(rawText)
         val html = item.optString("html")
         val isBanned = item.optBoolean("isBanned") || AmazonBannedDetector.isBannedMessage(
             MailMessage(id = item.optString("id"), from = from, to = to, inboxEmail = inboxEmail, subject = subject, intro = intro, text = text)
