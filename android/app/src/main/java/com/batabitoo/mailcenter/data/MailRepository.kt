@@ -68,16 +68,75 @@ class MailRepository(context: Context) {
     }
 
     suspend fun inboxes(): InboxesPayload = withContext(Dispatchers.IO) {
-        MailJson.inboxes(fetchCached("inboxes", "/api/inboxes"))
+        val fromServer = runCatching {
+            MailJson.inboxes(fetchCached("inboxes", "/api/inboxes"))
+        }.getOrNull()
+
+        if (fromServer != null && (fromServer.official.isNotEmpty() || fromServer.temp.isNotEmpty())) {
+            return@withContext fromServer
+        }
+
+        val fromFirestore = runCatching {
+            val raw = directGet(FIRESTORE_INBOXES_URL)
+            preferences.edit().putString("cache_inboxes_firestore_raw", raw).apply()
+            MailJson.firestoreInboxes(raw)
+        }.getOrNull()
+
+        if (fromFirestore != null && (fromFirestore.official.isNotEmpty() || fromFirestore.temp.isNotEmpty())) {
+            return@withContext fromFirestore
+        }
+
+        val cachedRaw = preferences.getString("cache_inboxes_firestore_raw", null)
+        if (!cachedRaw.isNullOrBlank()) {
+            runCatching { MailJson.firestoreInboxes(cachedRaw) }.getOrNull() ?: InboxesPayload()
+        } else {
+            InboxesPayload()
+        }
     }
 
     suspend fun current(): CurrentPayload = withContext(Dispatchers.IO) {
-        MailJson.current(fetchCached("current", "/api/inbox/current"))
+        val fromServer = runCatching {
+            MailJson.current(fetchCached("current", "/api/inbox/current"))
+        }.getOrNull()
+
+        if (fromServer != null && fromServer.inbox != null) {
+            return@withContext fromServer
+        }
+
+        val inboxesPayload = inboxes()
+        val messagesPayload = messages()
+        CurrentPayload(
+            inbox = inboxesPayload.official.firstOrNull() ?: inboxesPayload.temp.firstOrNull(),
+            messages = messagesPayload.messages,
+        )
     }
 
     suspend fun messages(type: String? = null): MessagesPayload = withContext(Dispatchers.IO) {
         val suffix = type?.let { "?type=$it" }.orEmpty()
-        MailJson.messages(fetchCached("messages_${type ?: "all"}", "/api/all-messages$suffix"))
+        val fromServer = runCatching {
+            MailJson.messages(fetchCached("messages_${type ?: "all"}", "/api/all-messages$suffix"))
+        }.getOrNull()
+
+        if (fromServer != null && fromServer.messages.isNotEmpty()) {
+            return@withContext fromServer
+        }
+
+        val fromFirestore = runCatching {
+            val raw = directGet(FIRESTORE_MESSAGES_URL)
+            preferences.edit().putString("cache_messages_firestore_raw", raw).apply()
+            MailJson.firestoreMessages(raw)
+        }.getOrNull()
+
+        if (fromFirestore != null && fromFirestore.messages.isNotEmpty()) {
+            return@withContext fromFirestore
+        }
+
+        val cachedRaw = preferences.getString("cache_messages_firestore_raw", null)
+        if (!cachedRaw.isNullOrBlank()) {
+            runCatching { MailJson.firestoreMessages(cachedRaw) }.getOrNull() ?: MessagesPayload()
+        } else {
+            MessagesPayload()
+        }
     }
 
     suspend fun logs(): List<RegistrationLog> = withContext(Dispatchers.IO) {
@@ -145,49 +204,46 @@ class MailRepository(context: Context) {
     }
 
     private fun request(path: String, method: String = "GET", body: String? = null): String {
-        val connection = (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
+        val url = URL("$baseUrl$path")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 12_000
-            readTimeout = 15_000
+            connectTimeout = 8000
+            readTimeout = 8000
             setRequestProperty("Accept", "application/json")
-            useCaches = false
             if (body != null) {
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             }
         }
-        try {
-            if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) {
-                val message = runCatching { JSONObject(raw).optString("error") }.getOrNull().orEmpty()
-                throw IOException(message.ifBlank { "خطأ من الخادم ($status)" })
-            }
-            return raw
-        } finally {
-            connection.disconnect()
+
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
+        val raw = stream.bufferedReader().use { it.readText() }
+
+        if (code !in 200..299) {
+            val errorMessage = runCatching { JSONObject(raw).optString("error") }.getOrNull()
+            throw IOException(errorMessage?.ifBlank { null } ?: "HTTP $code")
         }
+
+        return raw
     }
 
-    private fun directGet(fullUrl: String): String {
-        val connection = (URL(fullUrl).openConnection() as HttpURLConnection).apply {
+    private fun directGet(urlStr: String): String {
+        val url = URL(urlStr)
+        val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 8_000
-            readTimeout = 10_000
+            connectTimeout = 8000
+            readTimeout = 8000
             setRequestProperty("Accept", "application/json")
-            useCaches = false
         }
-        try {
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) throw IOException("HTTP $status: $raw")
-            return raw
-        } finally {
-            connection.disconnect()
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
+        val raw = stream.bufferedReader().use { it.readText() }
+        if (code !in 200..299) {
+            throw IOException("Firestore HTTP $code")
         }
+        return raw
     }
 
     private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
@@ -203,6 +259,8 @@ class MailRepository(context: Context) {
     companion object {
         const val DEFAULT_BASE_URL = "https://inbox-api.batabitoo.com"
         const val FIRESTORE_VERSION_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/app_config/version"
+        const val FIRESTORE_INBOXES_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?pageSize=300"
+        const val FIRESTORE_MESSAGES_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/messages?pageSize=300"
         private const val KEY_BASE_URL = "base_url"
     }
 }

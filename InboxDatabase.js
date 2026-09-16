@@ -328,24 +328,34 @@ class InboxDatabase {
   }
 
   async setInboxBanStatus(inboxId, status, reason = '') {
+    if (!inboxId) return null;
     const data = this.readLocal();
     data.inboxes = data.inboxes || [];
 
-    const clean = String(inboxId || '').trim().toLowerCase();
+    const rawId = String(inboxId || '').trim();
+    let decoded = rawId;
+    try { decoded = decodeURIComponent(rawId); } catch(e) {}
+
+    const cleanDecoded = decoded.toLowerCase().trim();
+    const cleanRaw = rawId.toLowerCase().trim();
+
     let inbox = data.inboxes.find(i =>
-      String(i.id).toLowerCase() === clean ||
-      (i.email && i.email.toLowerCase() === clean) ||
-      (i.email && i.email.toLowerCase().split('@')[0] === clean)
+      (i.id && String(i.id).toLowerCase() === cleanDecoded) ||
+      (i.id && String(i.id).toLowerCase() === cleanRaw) ||
+      (i.email && i.email.toLowerCase() === cleanDecoded) ||
+      (i.email && i.email.toLowerCase() === cleanRaw) ||
+      (i.email && i.email.toLowerCase().split('@')[0] === cleanDecoded) ||
+      (i.email && i.email.toLowerCase().split('@')[0] === cleanRaw)
     );
 
     if (!inbox) {
       // Auto-register missing inbox record on-the-fly
-      const isEmail = clean.includes('@');
-      const email = isEmail ? clean : `${clean}@batabitoo.com`;
+      const isEmail = cleanDecoded.includes('@');
+      const email = isEmail ? cleanDecoded : `${cleanDecoded}@batabitoo.com`;
       const isOfficial = email.endsWith('@batabitoo.com');
 
       inbox = {
-        id: isEmail ? `inbox_${clean.replace(/[^a-z0-9]/g, '_')}` : (clean || `official_${Date.now()}`),
+        id: rawId || (isEmail ? `inbox_${cleanDecoded.replace(/[^a-z0-9]/g, '_')}` : `official_${Date.now()}`),
         email: email,
         domain: isOfficial ? 'batabitoo.com' : (email.split('@')[1] || 'temp'),
         host: isOfficial ? 'batabitoo.com (Official Trusted)' : 'Temp Mail Service',
@@ -978,7 +988,7 @@ class InboxDatabase {
     const defaultVersion = {
       latestVersionCode: 7,
       latestVersionName: "1.3.3",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.3/Batabitoo-Mail-Center-1.3.3.apk",
+      downloadUrl: "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.3.3/Batabitoo-Mail-Center-1.3.3.apk",
       releaseNotes: "إصلاح خطأ تأكيد الحظر (Not Found)، وإعادة تصميم أزرار تصفية أمازون وبطاقات الحسابات لإظهار البريد كاملاً وتنظيم الأزرار بالأسفل.",
       mandatory: false,
       updatedAt: new Date().toISOString()

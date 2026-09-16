@@ -1,8 +1,8 @@
 {
-  "latestVersionCode": 7,
-  "latestVersionName": "1.3.3",
-  "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.3/Batabitoo-Mail-Center-1.3.3.apk",
-  "releaseNotes": "إصلاح خطأ تأكيد الحظر (Not Found)، وإعادة تصميم أزرار تصفية أمازون وبطاقات الحسابات لإظهار البريد كاملاً وتنظيم الأزرار بالأسفل.",
+  "latestVersionCode": 8,
+  "latestVersionName": "1.3.4",
+  "downloadUrl": "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.3.4/Batabitoo-Mail-Center-1.3.4.apk",
+  "releaseNotes": "إصلاح خطأ Not Found لتأكيد الحظر في تطبيق أندرويد والويب وإضافة التحقق السريع.",
   "mandatory": false,
-  "updatedAt": "2026-09-16T16:30:00.000Z"
+  "updatedAt": "2026-09-16T16:54:00.000Z"
 }

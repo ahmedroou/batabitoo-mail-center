@@ -302,10 +302,11 @@ const server = http.createServer(async (req, res) => {
     // ============================================================
     if (url.pathname === '/api/inbox/ban-status' && req.method === 'POST') {
       const payload = await parseBody();
-      const { id, banStatus, reason } = payload;
-      if (!id || !banStatus) return sendJSON(400, { error: 'Missing inbox id or banStatus' });
-      const updated = await db.setInboxBanStatus(id, banStatus, reason);
-      if (!updated) return sendJSON(404, { error: 'Inbox not found' });
+      const targetId = payload?.id || payload?.inboxId || payload?.email;
+      const status = payload?.banStatus || payload?.status || (payload?.verdict === 'reject' ? 'safe' : 'confirmed');
+      const reason = payload?.reason || '';
+      if (!targetId) return sendJSON(400, { error: 'Missing inbox id or email' });
+      const updated = await db.setInboxBanStatus(targetId, status, reason);
       return sendJSON(200, { success: true, inbox: updated });
     }
 

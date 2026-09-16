@@ -178,6 +178,30 @@ function bindEvents() {
     if (item) selectInbox(decodeURIComponent(item.dataset.inboxId));
   });
   $('message-list').addEventListener('click', event => {
+    const openMsgBtn = event.target.closest('[data-open-message]');
+    if (openMsgBtn) {
+      event.stopPropagation();
+      openMessage(decodeURIComponent(openMsgBtn.dataset.openMessage));
+      return;
+    }
+    const confirmBtn = event.target.closest('[data-confirm-ban]');
+    if (confirmBtn) {
+      event.stopPropagation();
+      submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
+      return;
+    }
+    const safeBtn = event.target.closest('[data-mark-safe]');
+    if (safeBtn) {
+      event.stopPropagation();
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
+      return;
+    }
+    const aiBtn = event.target.closest('[data-ai-verify]');
+    if (aiBtn) {
+      event.stopPropagation();
+      triggerAiVerify(aiBtn);
+      return;
+    }
     const otp = event.target.closest('[data-copy-otp]');
     if (otp) {
       event.stopPropagation();
@@ -648,7 +672,7 @@ function renderInboxes() {
         </div>
         <span>${html(inbox.email || '')}</span>
         ${suspected ? `
-        <div class="ban-confirm-inline" onclick="event.stopPropagation()">
+        <div class="ban-confirm-inline">
           <span class="ban-confirm-q">اشتباه حظر بانتظار تأكيدك أو استبعاد النمط:</span>
           <div class="ban-confirm-btns">
             ${suspectMsg ? `<button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(suspectMsg.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>` : ''}
@@ -893,7 +917,7 @@ function renderAmazonMessages() {
         <div class="message-subject">${html(message.subject || '(بدون عنوان)')}</div>
         <div class="message-preview">${html(message.intro || message.text || formatAddress(message.to) || '')}</div>
         ${isSuspected && inbox ? `
-        <div class="ban-confirm-inline" onclick="event.stopPropagation()">
+        <div class="ban-confirm-inline">
           <span class="ban-confirm-q">اشتباه حظر بانتظار قرارك لتحديد القاعدة:</span>
           <div class="ban-confirm-btns">
             <button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(message.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>

@@ -94,19 +94,20 @@ data class RegistrationLog(
 )
 
 data class InboxesPayload(
-    val activeId: String?,
-    val official: List<Inbox>,
-    val temp: List<Inbox>,
+    val activeId: String? = null,
+    val official: List<Inbox> = emptyList(),
+    val temp: List<Inbox> = emptyList(),
     val amazon: List<Inbox> = emptyList(),
     val banned: List<Inbox> = emptyList(),
     val suspected: List<Inbox> = emptyList(),
 )
 
-data class CurrentPayload(val inbox: Inbox?, val messages: List<MailMessage>)
+data class CurrentPayload(val inbox: Inbox? = null, val messages: List<MailMessage> = emptyList())
+
 data class MessagesPayload(
-    val messages: List<MailMessage>,
-    val officialCount: Int,
-    val tempCount: Int,
+    val messages: List<MailMessage> = emptyList(),
+    val officialCount: Int = 0,
+    val tempCount: Int = 0,
     val amazonCount: Int = 0,
     val bannedCount: Int = 0,
     val suspectedCount: Int = 0,
@@ -391,6 +392,127 @@ object MailJson {
         )
     }
 
+    fun firestoreInbox(doc: JSONObject): Inbox {
+        val fields = doc.optJSONObject("fields") ?: JSONObject()
+        val email = fields.optStringValue("email")
+        val label = fields.optStringValue("label")
+        val personName = fields.optStringValue("personName")
+        val official = fields.optBooleanValue("isOfficial") || fields.optStringValue("type") == "official" || email.endsWith("@batabitoo.com", true)
+        val banStatus = fields.optStringValue("banStatus").ifBlank { if (fields.optBooleanValue("isBanned")) "confirmed" else "none" }
+        val isConfirmedBanned = official && (banStatus == "confirmed" || fields.optBooleanValue("isBanned"))
+        val isSuspected = official && (banStatus == "suspected")
+        val isAmazon = official && (isConfirmedBanned || isSuspected || fields.optBooleanValue("isAmazon") || listOf(email, label, personName).any {
+            it.lowercase().contains("amazon") || it.contains("أمازون") || it.contains("امازون") || it.contains("إمازون")
+        })
+        val docName = doc.optString("name", "")
+        val id = fields.optStringValue("id").ifBlank { if (docName.contains("/")) docName.split("/").last() else "" }
+        return Inbox(
+            id = id,
+            email = email,
+            domain = fields.optStringValue("domain"),
+            host = fields.optStringValue("host"),
+            label = label,
+            personName = personName,
+            isOfficial = official,
+            isAmazon = isAmazon,
+            isBanned = isConfirmedBanned,
+            banStatus = banStatus,
+            banReason = fields.optStringValue("banReason"),
+            type = if (official) "official" else "temp",
+            messageCount = fields.optIntValue("messageCount"),
+            createdAt = fields.optStringValue("createdAt"),
+        )
+    }
+
+    fun firestoreInboxes(raw: String): InboxesPayload {
+        val root = JSONObject(raw)
+        val docs = root.optJSONArray("documents") ?: org.json.JSONArray()
+        val allList = mutableListOf<Inbox>()
+        for (i in 0 until docs.length()) {
+            val doc = docs.optJSONObject(i) ?: continue
+            val item = firestoreInbox(doc)
+            if (item.email.isNotBlank()) {
+                allList.add(item)
+            }
+        }
+        val official = allList.filter { it.isOfficial }
+        val temp = allList.filter { !it.isOfficial }
+        val amazon = allList.filter { it.isAmazon }
+        val banned = allList.filter { it.isConfirmedBanned }
+        val suspected = allList.filter { it.isSuspected }
+
+        return InboxesPayload(
+            activeId = official.firstOrNull()?.id ?: temp.firstOrNull()?.id,
+            official = official,
+            temp = temp,
+            amazon = amazon,
+            banned = banned,
+            suspected = suspected,
+        )
+    }
+
+    fun firestoreMessage(doc: JSONObject): MailMessage {
+        val fields = doc.optJSONObject("fields") ?: JSONObject()
+        val docName = doc.optString("name", "")
+        val id = fields.optStringValue("id").ifBlank { if (docName.contains("/")) docName.split("/").last() else "" }
+        val from = fields.optStringValue("from")
+        val to = fields.optStringValue("to")
+        val inboxEmail = fields.optStringValue("inboxEmail")
+        val subject = fields.optStringValue("subject")
+        val intro = fields.optStringValue("intro")
+        val text = fields.optStringValue("text")
+        val html = fields.optStringValue("html")
+        val isBanned = fields.optBooleanValue("isBanned") || AmazonBannedDetector.isBannedMessage(
+            MailMessage(id = id, from = from, to = to, inboxEmail = inboxEmail, subject = subject, intro = intro, text = text)
+        )
+        val isAmazon = isBanned || fields.optBooleanValue("isAmazon") || listOf(from, to, inboxEmail, subject, intro, text).any {
+            it.lowercase().contains("amazon") || it.contains("أمازون") || it.contains("امازون") || it.contains("إمازون")
+        }
+        val banReason = if (isBanned) fields.optStringValue("banReason").ifBlank {
+            AmazonBannedDetector.getBanReason(MailMessage(id = id, from = from, subject = subject, intro = intro, text = text))
+        } else ""
+
+        return MailMessage(
+            id = id,
+            from = from,
+            to = to,
+            inboxEmail = inboxEmail,
+            subject = subject,
+            intro = intro,
+            text = text,
+            html = html,
+            otp = fields.optStringValue("otp"),
+            isAmazon = isAmazon,
+            isBanned = isBanned,
+            banReason = banReason,
+            bodyStatus = fields.optStringValue("bodyStatus"),
+            attachments = emptyList(),
+            createdAt = fields.optStringValue("createdAt"),
+            isOfficial = fields.optBooleanValue("isOfficialDomain") || (if (inboxEmail.isNotBlank()) inboxEmail else to).endsWith("@batabitoo.com", true),
+        )
+    }
+
+    fun firestoreMessages(raw: String): MessagesPayload {
+        val root = JSONObject(raw)
+        val docs = root.optJSONArray("documents") ?: org.json.JSONArray()
+        val msgList = mutableListOf<MailMessage>()
+        for (i in 0 until docs.length()) {
+            val doc = docs.optJSONObject(i) ?: continue
+            val item = firestoreMessage(doc)
+            if (item.id.isNotBlank()) {
+                msgList.add(item)
+            }
+        }
+        return MessagesPayload(
+            messages = msgList,
+            officialCount = msgList.count { it.isOfficial },
+            tempCount = msgList.count { !it.isOfficial },
+            amazonCount = msgList.count { it.isAmazon },
+            bannedCount = msgList.count { it.isBanned },
+            suspectedCount = 0,
+        )
+    }
+
     fun inboxes(raw: String): InboxesPayload {
         val root = JSONObject(raw)
         return InboxesPayload(
@@ -542,5 +664,22 @@ object MailJson {
     private fun <T> JSONArray?.toObjects(transform: (JSONObject) -> T): List<T> {
         if (this == null) return emptyList()
         return buildList { for (index in 0 until length()) optJSONObject(index)?.let { add(transform(it)) } }
+    }
+
+    private fun JSONObject.optStringValue(key: String): String {
+        val field = optJSONObject(key) ?: return optString(key, "")
+        return field.optString("stringValue")
+            .ifBlank { field.optString("integerValue") }
+            .ifBlank { field.optString("referenceValue") }
+    }
+
+    private fun JSONObject.optBooleanValue(key: String): Boolean {
+        val field = optJSONObject(key) ?: return optBoolean(key, false)
+        return field.optBoolean("booleanValue", false)
+    }
+
+    private fun JSONObject.optIntValue(key: String): Int {
+        val field = optJSONObject(key) ?: return optInt(key, 0)
+        return field.optString("integerValue").toIntOrNull() ?: field.optInt("integerValue", 0)
     }
 }
