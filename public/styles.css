@@ -649,6 +649,86 @@ svg {
   transform: none;
 }
 
+.btn-view-suspect {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.3;
+  border: none;
+}
+
+.btn-view-suspect:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+}
+
+.reader-learning-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  margin: 12px 0 16px;
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-md);
+  color: #1e3a8a;
+  flex-wrap: wrap;
+}
+
+.reader-learning-banner .learning-icon {
+  font-size: 22px;
+}
+
+.reader-learning-banner .learning-copy {
+  flex: 1;
+  min-width: 200px;
+}
+
+.reader-learning-banner .learning-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1e40af;
+}
+
+.reader-learning-banner .learning-copy p {
+  font-size: 11px;
+  color: #1d4ed8;
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+
+.reader-learning-banner .learning-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-reject-rule {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #93c5fd;
+  color: #1e40af;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-reject-rule:hover {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  transform: translateY(-1px);
+}
+
 /* Search Box */
 .search-box {
   height: 40px;

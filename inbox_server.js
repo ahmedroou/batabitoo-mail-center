@@ -321,6 +321,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ============================================================
+    // POST /api/ai/feedback — Submit AI feedback for training & rules
+    // ============================================================
+    if (url.pathname === '/api/ai/feedback' && req.method === 'POST') {
+      const payload = await parseBody();
+      if (!payload?.inboxId || !payload?.verdict) {
+        return sendJSON(400, { error: 'Missing inboxId or verdict' });
+      }
+      const entry = await db.saveAiFeedback(payload);
+      return sendJSON(200, { success: true, entry });
+    }
+
+    // ============================================================
+    // GET /api/ai/feedback — Get all feedback training logs
+    // ============================================================
+    if (url.pathname === '/api/ai/feedback' && req.method === 'GET') {
+      const logs = db.getAiFeedbackLogs();
+      return sendJSON(200, { success: true, logs });
+    }
+
+    // ============================================================
     // GET /api/ai/status — Check Gemini AI availability
     // ============================================================
     if (url.pathname === '/api/ai/status' && req.method === 'GET') {

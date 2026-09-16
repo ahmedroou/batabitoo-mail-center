@@ -164,6 +164,13 @@ class InboxDatabase {
     if (!msg) return false;
     if (msg.isBanned === true) return true;
 
+    const data = this.readLocal();
+    const ignored = data.ignoredBanPatterns || [];
+    const subj = String(msg.subject || '').toLowerCase().trim();
+    if (subj && ignored.some(p => subj.includes(p))) {
+      return false;
+    }
+
     // Normal notifications with OTP are verification codes, not account closures
     const textToCheck = [
       msg.subject,
@@ -354,6 +361,52 @@ class InboxDatabase {
     }
 
     return inbox;
+  }
+
+  async saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason }) {
+    const data = this.readLocal();
+    data.aiFeedbackLogs = data.aiFeedbackLogs || [];
+
+    const entry = {
+      id: `feedback_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      inboxId,
+      messageId,
+      verdict, // 'confirm' | 'reject'
+      subject: subject || '',
+      sender: sender || '',
+      reason: reason || (verdict === 'confirm' ? 'تأكيد المستخدم لقاعدة الحظر' : 'استبعاد النمط من قبل المستخدم وتدريب الكود'),
+      timestamp: new Date().toISOString()
+    };
+
+    data.aiFeedbackLogs.unshift(entry);
+
+    if (verdict === 'reject') {
+      data.ignoredBanPatterns = data.ignoredBanPatterns || [];
+      const cleanSubj = (subject || '').toLowerCase().trim();
+      if (cleanSubj && !data.ignoredBanPatterns.includes(cleanSubj)) {
+        data.ignoredBanPatterns.push(cleanSubj);
+      }
+      await this.setInboxBanStatus(inboxId, 'safe', `[تم استبعاد النمط] ${subject || reason}`);
+    } else if (verdict === 'confirm') {
+      await this.setInboxBanStatus(inboxId, 'confirmed', `[تأكيد المستخدم] ${reason || 'إغلاق وتأكيد الحظر'}`);
+    }
+
+    this.writeLocal(data);
+
+    if (this.isCloudConnected && this.db) {
+      try {
+        await this.db.collection('ai_feedback_logs').doc(entry.id).set(sanitizeForFirestore(entry));
+      } catch (e) {
+        console.error('⚠️ Firestore saveAiFeedback error:', e.message);
+      }
+    }
+
+    return entry;
+  }
+
+  getAiFeedbackLogs() {
+    const data = this.readLocal();
+    return data.aiFeedbackLogs || [];
   }
 
   /**
@@ -866,10 +919,10 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 5,
-      latestVersionName: "1.3.1",
-      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.1.apk",
-      releaseNotes: "تفعيل التحديث المباشر من داخل التطبيق (In-App Download) لحل مشكلة متصفح جوجل وتحميل التحديثات بسلاسة.",
+      latestVersionCode: 6,
+      latestVersionName: "1.3.2",
+      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.2.apk",
+      releaseNotes: "تعديل زر إنشاء الحسابات بالتتابع ليبدأ دائماً من الرقم 1 تلقائياً (مثل ahmedroou1).",
       mandatory: false,
       updatedAt: new Date().toISOString()
     };

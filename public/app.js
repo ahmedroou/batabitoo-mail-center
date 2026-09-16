@@ -390,30 +390,76 @@ async function updateBanStatus(id, banStatus, reason = '') {
   }
 }
 
+const autoCheckedInboxes = new Set();
+
+function findInboxById(id) {
+  if (!id) return null;
+  return [...state.official, ...state.temp, ...state.amazon, ...state.banned, ...(state.suspected || [])].find(i => i.id === id || i.email === id);
+}
+
+async function autoVerifySuspectedInboxes() {
+  const pending = (state.suspected || []).filter(inbox => inbox && inbox.id && !autoCheckedInboxes.has(inbox.id));
+  if (!pending.length) return;
+
+  for (const inbox of pending) {
+    autoCheckedInboxes.add(inbox.id);
+    try {
+      const res = await api('/api/inbox/ai-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: inbox.id })
+      });
+
+      if (res && res.success && res.aiResult) {
+        const verdict = res.aiResult;
+        if (verdict.classification === 'banned') {
+          toast(`🤖 AI تلقائي: تم تأكيد حظر الحساب ⛔ (${inbox.email || ''})`);
+          await refreshEverything();
+        } else if (verdict.classification === 'safe') {
+          toast(`🤖 AI تلقائي: الحساب سليم ومجتاز للفحص ✅ (${inbox.email || ''})`);
+          await refreshEverything();
+        } else {
+          // AI returned uncertain or could not determine
+          toast(`⚠️ تنبيه الذكاء الاصطناعي: لم يتمكن AI من جزم حالة الحساب (${inbox.email || ''}): ${verdict.reason || 'النتيجة غير حاسمة'}`, true);
+        }
+      } else {
+        const errReason = res?.error || res?.reason || 'لا تتوفر استجابة حاسمة من نموذج AI';
+        toast(`⚠️ تنبيه الذكاء الاصطناعي: تعذر فحص الحساب (${inbox.email || ''}): ${errReason}`, true);
+      }
+    } catch (err) {
+      toast(`⚠️ تنبيه الذكاء الاصطناعي: فشل الاتصال بنموذج AI لفحص (${inbox.email || ''}): ${friendlyError(err)}`, true);
+    }
+  }
+}
+
 async function triggerAiVerify(btn) {
   const inboxId = btn.dataset.aiVerify;
-  const origText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'جاري الفحص... 🤖';
+  const inbox = findInboxById(inboxId);
+  const emailLabel = inbox?.email || '';
+  setBusy(btn, true, 'جاري الفحص... 🤖');
   try {
     const res = await api('/api/inbox/ai-verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: inboxId })
     });
-    const verdict = res.aiResult;
-    if (verdict) {
-      const icon = verdict.classification === 'banned' ? '⛔' : verdict.classification === 'safe' ? '✅' : '⚠️';
-      const conf = verdict.confidence ? ` (${verdict.confidence})` : '';
-      toast(`AI ${icon}${conf}: ${verdict.reason || 'تم الفحص'}`, verdict.classification === 'safe' ? false : false);
+    if (res && res.success && res.aiResult) {
+      const verdict = res.aiResult;
+      if (verdict.classification === 'banned') {
+        toast(`🤖 AI: تم تأكيد حظر الحساب ⛔ (${emailLabel})`);
+      } else if (verdict.classification === 'safe') {
+        toast(`🤖 AI: الحساب سليم ✅ (${emailLabel})`);
+      } else {
+        toast(`⚠️ تنبيه AI: لم يتمكن من حسم النتيجة (${emailLabel}): ${verdict.reason || 'غير متأكد'}`, true);
+      }
+      await refreshEverything();
     } else {
-      toast('تم الفحص بالذكاء الاصطناعي 🤖');
+      toast(`⚠️ تنبيه AI: تعذر الفحص (${emailLabel}): ${res?.error || res?.reason || 'لا تتوفر استجابة'}`, true);
     }
-    await refreshEverything();
   } catch (err) {
-    toast(friendlyError(err), true);
-    btn.disabled = false;
-    btn.textContent = origText;
+    toast(`⚠️ تنبيه AI: فشل الاتصال (${emailLabel}): ${friendlyError(err)}`, true);
+  } finally {
+    setBusy(btn, false, 'فحص AI 🤖');
   }
 }
 
@@ -448,6 +494,7 @@ async function loadInboxes() {
   $('temp-count').textContent = formatNumber(state.temp.length);
   if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
   if ($('banned-count')) $('banned-count').textContent = formatNumber(state.banned.length);
+  autoVerifySuspectedInboxes();
   renderInboxes();
 }
 
@@ -1141,9 +1188,6 @@ function closeReader(updateHistory = true) {
 function getNextSequentialPrefix(base = 'ahmedroou') {
   const allEmails = [...state.official, ...state.temp].map(i => (i.email || '').toLowerCase().trim());
   const baseEmail = `${base}@batabitoo.com`.toLowerCase();
-  if (!allEmails.includes(baseEmail)) {
-    return base;
-  }
   let maxNum = 0;
   const re = new RegExp(`^${base}(\\d+)@batabitoo\\.com$`, 'i');
   for (const email of allEmails) {

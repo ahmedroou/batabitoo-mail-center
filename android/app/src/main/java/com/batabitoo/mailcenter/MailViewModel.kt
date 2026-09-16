@@ -273,10 +273,6 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     fun getNextSequentialPrefix(base: String = "ahmedroou"): String {
         val cleanBase = base.trim().lowercase()
         val allEmails = (_uiState.value.officialInboxes + _uiState.value.tempInboxes).map { it.email.lowercase().trim() }
-        val baseEmail = "$cleanBase@batabitoo.com".lowercase()
-        if (!allEmails.contains(baseEmail)) {
-            return cleanBase
-        }
         val regex = Regex("""^${Regex.escape(cleanBase)}(\d+)@batabitoo\.com$""")
         var maxNum = 0
         for (email in allEmails) {

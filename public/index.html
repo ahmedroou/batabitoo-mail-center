@@ -160,6 +160,19 @@
               </div>
             </div>
 
+            <!-- Interactive Learning & Rule Training Banner -->
+            <div class="reader-learning-banner hidden" id="reader-learning-banner">
+              <div class="learning-icon">🧠</div>
+              <div class="learning-copy">
+                <strong>تدريب القواعد وتوجيه النظام</strong>
+                <p>هل تعني هذه الرسالة إغلاق/تقييد الحساب؟ قرارك يدرّب القواعد التلقائية فوراً.</p>
+              </div>
+              <div class="learning-actions">
+                <button class="btn-confirm-ban" id="reader-confirm-rule-btn" type="button" title="تأكيد إغلاق الحساب">تأكيد الحظر ⛔</button>
+                <button class="btn-reject-rule" id="reader-reject-rule-btn" type="button" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
+              </div>
+            </div>
+
             <details class="reader-envelope" open><summary>تفاصيل المرسل والمستلم</summary><div class="reader-meta-grid">
               <div class="reader-meta-item">
                 <div class="sender-avatar" id="reader-avatar">@</div>
@@ -219,6 +232,6 @@
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=11" defer></script>
+  <script src="/app.js?v=12" defer></script>
 </body>
 </html>
