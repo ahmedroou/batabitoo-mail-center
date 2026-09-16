@@ -436,6 +436,29 @@ async function updateBanStatus(id, banStatus, reason = '') {
     toast(text);
     await refreshEverything();
   } catch (err) {
+    try {
+      const docId = id.includes('@') ? `inbox_${id.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : id;
+      const updateUrl = `https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/${encodeURIComponent(docId)}?updateMask.fieldPaths=banStatus&updateMask.fieldPaths=isBanned`;
+      const res = await fetch(updateUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: {
+            banStatus: { stringValue: banStatus },
+            isBanned: { booleanValue: banStatus === 'confirmed' },
+            ...(reason ? { banReason: { stringValue: reason } } : {})
+          }
+        })
+      });
+      if (res.ok) {
+        const text = banStatus === 'confirmed' ? 'تم تأكيد حظر الحساب بنجاح ⛔' : 'تم تأكيد سلامة الحساب وإلغاء الاشتباه ✅';
+        toast(text);
+        await refreshEverything();
+        return;
+      }
+    } catch (fsErr) {
+      console.error('Firestore REST fallback error:', fsErr);
+    }
     toast(friendlyError(err), true);
   }
 }
