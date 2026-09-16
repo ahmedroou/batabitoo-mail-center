@@ -1801,6 +1801,10 @@ svg {
     color: var(--primary);
   }
 
+  .mobile-nav button[data-mobile-view="amazon"].active {
+    color: #ea580c;
+  }
+
   .mobile-create i {
     width: 32px;
     height: 32px;

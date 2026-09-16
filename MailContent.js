@@ -100,9 +100,12 @@ async function normalize(payload, id, options = {}) {
   }
 
   const available = Boolean(text.trim() || originalHtml.trim() || attachments.length);
-  const from = parser.formatAddress(payload.from || payload.sender || decoded.from || '');
-  const to = parser.formatAddress(payload.to || payload.recipient || decoded.to || '');
   const subject = parser.decodeRfc2047(payload.subject || decoded.subject || '(بدون عنوان)');
+  const rawFromCandidate = (decoded.from && !/^[a-f0-9_-]{16,}@/i.test(String(decoded.from)))
+    ? decoded.from
+    : (payload.from || decoded.from || payload.sender || '');
+  const from = parser.cleanSenderName(rawFromCandidate, subject);
+  const to = parser.formatAddress(payload.to || payload.recipient || decoded.to || '');
   const otp = available ? parser.extractOtp(text, subject) : null;
 
   let finalRenderedHtml = '';
@@ -190,7 +193,7 @@ function render(message, suppliedBody) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; font-src data: https:; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https: http: data: blob:; img-src * data: blob:; style-src * 'unsafe-inline'; font-src * data:;">
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     html, body {
@@ -200,13 +203,13 @@ function render(message, suppliedBody) {
       color: #1a202c;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Cairo", Helvetica, Arial, sans-serif;
       font-size: 15px;
-      line-height: 1.7;
+      line-height: 1.65;
       -webkit-text-size-adjust: 100%;
-      word-break: break-word;
-      overflow-wrap: anywhere;
+      text-size-adjust: 100%;
+      overflow-wrap: break-word;
     }
     body {
-      padding: 16px;
+      padding: 14px 16px;
     }
     img {
       max-width: 100% !important;
@@ -218,35 +221,28 @@ function render(message, suppliedBody) {
       max-width: 100% !important;
       border-collapse: collapse;
     }
-    td, th {
-      word-break: break-word;
-    }
     a {
-      color: #3b50df;
+      color: #2563eb;
       text-decoration: underline;
-      overflow-wrap: anywhere;
     }
     pre, code {
       white-space: pre-wrap;
       word-break: break-word;
       font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     }
+    #mail-root {
+      width: 100%;
+      max-width: 860px;
+      margin: 0 auto;
+    }
     @media (max-width: 600px) {
-      body { padding: 12px; font-size: 14px; }
-      table { max-width: 100% !important; }
+      body { padding: 10px 12px; font-size: 14px; }
+      #mail-root { max-width: 100%; }
     }
   </style>
 </head>
 <body dir="auto">
   <div id="mail-root">${safe}</div>
-  <style>
-    html{width:100%;margin:0!important;padding:0!important}
-    body{width:100%!important;min-width:0!important;max-width:100%!important;margin:0!important;padding:24px!important;box-sizing:border-box;display:block!important}
-    #mail-root{display:flow-root;width:100%;max-width:880px;margin-inline:auto!important;min-width:0;text-align:initial}
-    #mail-root > table,#mail-root > div > table{margin-inline:auto!important}
-    #mail-root img{max-width:100%!important;height:auto!important}
-    @media(max-width:600px){body{padding:12px!important}#mail-root{max-width:100%}#mail-root table,#mail-root div{max-width:100%!important;min-width:0!important}}
-  </style>
 </body>
 </html>`;
 }

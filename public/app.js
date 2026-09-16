@@ -161,10 +161,13 @@ function bindEvents() {
     document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item === button));
     if (target === 'inboxes') {
       document.querySelector('.workspace').classList.remove('show-content');
+    } else if (target === 'amazon') {
+      document.querySelector('.workspace').classList.add('show-content');
+      switchContentView('amazon');
     } else {
       document.querySelector('.workspace').classList.add('show-content');
       if (target === 'logs') switchContentView('logs');
-      else if (state.view === 'logs') switchContentView('current');
+      else if (state.view === 'logs' || state.view === 'amazon') switchContentView('current');
     }
     placeHero();
   });
@@ -423,7 +426,7 @@ function renderMessages(messages) {
   if (!messages.length) return showEmpty('لا توجد رسائل بعد', 'ستظهر الرسائل الجديدة تلقائيًا عند وصولها.');
   hideEmpty();
   $('message-list').innerHTML = messages.map(message => {
-    const sender = formatAddress(message.from) || 'مرسل غير معروف';
+    const sender = cleanSenderName(message.from, message.subject);
     const otp = message.otp ? String(message.otp) : '';
     const banned = isBannedMessage(message);
     const amazon = !banned && isAmazonMessage(message);
@@ -501,7 +504,7 @@ async function openMessage(id, pushHistory = true) {
     if (request !== readerRequest || state.currentMessage?.id !== id) return;
     state.currentMessage = message;
 
-    const sender = formatAddress(message.from) || 'مرسل غير معروف';
+    const sender = cleanSenderName(message.from, message.subject);
     const recipient = formatAddress(message.to) || message.inboxEmail || state.activeInbox?.email || '—';
 
     $('reader-subject').textContent = message.subject || '(بدون عنوان)';
@@ -813,6 +816,64 @@ function formatAddress(value) {
     return name && address && name !== address ? `${name} <${address}>` : address || name;
   }
   return String(value);
+}
+
+function decodeRfc2047(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (_, charset, encoding, content) => {
+    try {
+      if (encoding.toUpperCase() === 'B') {
+        return decodeURIComponent(escape(atob(content)));
+      }
+      return content.replace(/_/g, ' ');
+    } catch {
+      return content;
+    }
+  });
+}
+
+function cleanSenderName(val, subject = '') {
+  if (!val) return 'مرسل غير معروف';
+  let str = typeof val === 'object' ? (val.text || val.name || val.address || '') : String(val);
+  str = decodeRfc2047(str).trim();
+
+  // If has friendly name: "Friendly Name" <email@domain.com>
+  const matchName = str.match(/^["']?([^"<]+?)["']?\s*<([^>]+)>/);
+  if (matchName) {
+    const friendly = matchName[1].trim();
+    const email = matchName[2].trim();
+    if (friendly && friendly !== email && !/^[a-f0-9A-F_-]{16,}$/.test(friendly) && !/^[0-9]+[a-z0-9-]+$/i.test(friendly)) {
+      return friendly;
+    }
+    str = email;
+  }
+
+  str = str.replace(/^<|>$/g, '').trim();
+
+  // Amazon technical bounce / SES envelopes
+  if (/@(?:bounces\.)?amazon\.(sa|com|ae|eg|ca|co\.uk|de|fr)/i.test(str)) {
+    const isSa = /amazon\.sa/i.test(str) || /[\u0600-\u06FF]/.test(subject);
+    const isCa = /amazon\.ca/i.test(str);
+    const isAe = /amazon\.ae/i.test(str);
+    const isUk = /amazon\.co\.uk/i.test(str);
+    if (/ofm@/i.test(str)) return 'أمازون OFM (مراجعة أمنية)';
+    if (/order-update@|auto-confirm@|shipment/i.test(str)) return isSa ? 'أمازون السعودية (طلبات)' : 'Amazon Orders';
+    if (isSa) return 'أمازون السعودية (Amazon.sa)';
+    if (isCa) return 'Amazon Canada (أمازون)';
+    if (isAe) return 'Amazon.ae (أمازون)';
+    if (isUk) return 'Amazon UK (أمازون)';
+    return 'أمازون (Amazon)';
+  }
+
+  // Generic technical bounce addresses: 12345678abcdef...@bounces.domain.com
+  const bounceMatch = str.match(/^[a-f0-9A-F_-]{12,}@(?:bounces\.)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$/);
+  if (bounceMatch) {
+    const domain = bounceMatch[1];
+    const brand = domain.split('.')[0];
+    return brand.charAt(0).toUpperCase() + brand.slice(1);
+  }
+
+  return str;
 }
 
 function initials(value) {

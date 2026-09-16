@@ -195,6 +195,53 @@ object AmazonBannedDetector {
     }
 }
 
+object SenderFormatter {
+    fun format(rawFrom: String, subject: String = ""): String {
+        var str = rawFrom.trim()
+        if (str.isBlank()) return "مرسل غير معروف"
+
+        val match = Regex("""^["']?([^"<]+?)["']?\s*<([^>]+)>""").find(str)
+        if (match != null) {
+            val friendly = match.groupValues[1].trim()
+            val email = match.groupValues[2].trim()
+            if (friendly.isNotBlank() && friendly != email && !friendly.matches(Regex("""^[a-f0-9A-F_-]{16,}$""")) && !friendly.matches(Regex("""^[0-9]+[a-z0-9-]+$""", RegexOption.IGNORE_CASE))) {
+                return friendly
+            }
+            str = email
+        }
+
+        str = str.removePrefix("<").removeSuffix(">").trim()
+
+        val lower = str.lowercase()
+        if (lower.contains("@bounces.amazon.") || lower.contains("@amazon.") || lower.contains("amazon.sa") || lower.contains("amazon.ca") || lower.contains("amazon.ae")) {
+            val isSa = lower.contains("amazon.sa") || subject.contains(Regex("""[\u0600-\u06FF]"""))
+            val isCa = lower.contains("amazon.ca")
+            val isAe = lower.contains("amazon.ae")
+            val isUk = lower.contains("amazon.co.uk")
+            if (lower.contains("ofm@")) return "أمازون OFM (مراجعة أمنية)"
+            if (lower.contains("order-update@") || lower.contains("auto-confirm@") || lower.contains("shipment")) {
+                return if (isSa) "أمازون السعودية (طلبات)" else "Amazon Orders"
+            }
+            return when {
+                isSa -> "أمازون السعودية (Amazon.sa)"
+                isCa -> "Amazon Canada (أمازون)"
+                isAe -> "Amazon.ae (أمازون)"
+                isUk -> "Amazon UK (أمازون)"
+                else -> "أمازون (Amazon)"
+            }
+        }
+
+        val bounceMatch = Regex("""^[a-f0-9A-F_-]{12,}@(?:bounces\.)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$""").find(str)
+        if (bounceMatch != null) {
+            val domain = bounceMatch.groupValues[1]
+            val brand = domain.split('.').firstOrNull().orEmpty().replaceFirstChar { it.uppercase() }
+            if (brand.isNotBlank()) return brand
+        }
+
+        return str
+    }
+}
+
 object MailJson {
     fun status(raw: String, currentVersionCode: Int = 1): SystemStatus {
         val root = JSONObject(raw)
@@ -329,10 +376,11 @@ object MailJson {
     }
 
     private fun message(item: JSONObject): MailMessage {
-        val from = address(item.opt("from"))
+        val rawFrom = address(item.opt("from"))
+        val subject = item.optString("subject", "(بدون عنوان)")
+        val from = SenderFormatter.format(rawFrom, subject)
         val to = address(item.opt("to"))
         val inboxEmail = item.optString("inboxEmail")
-        val subject = item.optString("subject", "(بدون عنوان)")
         val intro = item.optString("intro")
         val text = item.optString("text")
         val html = item.optString("html")

@@ -26,7 +26,7 @@ class MailJsonTest {
         assertEquals("official_1", inboxes.activeId)
 
         val message = MailJson.message("""{"id":"m1","from":{"name":"Amazon","address":"no-reply@amazon.com"},"to":[{"address":"me@batabitoo.com"}],"subject":"Your code","otp":"123456"}""")
-        assertEquals("Amazon <no-reply@amazon.com>", message.from)
+        assertEquals("Amazon", message.from)
         assertEquals("me@batabitoo.com", message.to)
         assertEquals("123456", message.otp)
     }

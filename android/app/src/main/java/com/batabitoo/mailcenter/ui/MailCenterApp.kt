@@ -7,6 +7,7 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -116,6 +117,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.batabitoo.mailcenter.AmazonTab
 import com.batabitoo.mailcenter.InboxFilter
 import com.batabitoo.mailcenter.MailUiState
 import com.batabitoo.mailcenter.MailViewModel
@@ -124,6 +126,7 @@ import com.batabitoo.mailcenter.MessageFilter
 import com.batabitoo.mailcenter.data.AppVersionInfo
 import com.batabitoo.mailcenter.data.Inbox
 import com.batabitoo.mailcenter.data.MailMessage
+import com.batabitoo.mailcenter.data.SenderFormatter
 import com.batabitoo.mailcenter.data.RegistrationLog
 import com.batabitoo.mailcenter.ui.theme.AmazonOrange
 import com.batabitoo.mailcenter.ui.theme.AmazonWarm
@@ -179,6 +182,7 @@ fun MailCenterApp(viewModel: MailViewModel = viewModel()) {
             Crossfade(targetState = state.section, animationSpec = tween(220), label = "section") { section ->
             when (section) {
                 MainSection.INBOXES -> InboxesScreen(state, viewModel)
+                MainSection.AMAZON -> AmazonScreen(state, viewModel)
                 MainSection.MESSAGES -> MessagesScreen(state, viewModel)
                 MainSection.LOGS -> LogsScreen(state, viewModel::setSearch)
                 MainSection.SETTINGS -> SettingsScreen(state, viewModel)
@@ -300,8 +304,6 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
     val source = when (state.inboxFilter) {
         InboxFilter.OFFICIAL -> state.officialInboxes
         InboxFilter.TEMP -> state.tempInboxes
-        InboxFilter.AMAZON -> state.amazonInboxes
-        InboxFilter.BANNED -> state.bannedInboxes
     }
     val query = state.search.trim()
     val list = source.filter { query.isBlank() || listOf(it.email, it.personName, it.label, it.domain).any { value -> value.contains(query, true) } }
@@ -312,9 +314,11 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            MailUniverseHero(state) { filter ->
-                viewModel.setInboxFilter(filter)
-            }
+            MailUniverseHero(
+                state = state,
+                onSelectFilter = { viewModel.setInboxFilter(it) },
+                onNavigateToAmazon = { viewModel.setSection(MainSection.AMAZON) }
+            )
         }
         val update = state.appUpdate
         if (update != null && update.hasUpdate) {
@@ -334,7 +338,7 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("حساباتك", color = Primary, style = MaterialTheme.typography.labelSmall)
+                    Text("حساباتك الرسمية والمؤقتة", color = Primary, style = MaterialTheme.typography.labelSmall)
                     Text("صناديق البريد", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
                 Text(
@@ -345,10 +349,8 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
             }
             MailPills(
                 listOf(
-                    "رسمي  ${arabicNumber(state.officialInboxes.size)}",
-                    "سريع  ${arabicNumber(state.tempInboxes.size)}",
-                    "أمازون  ${arabicNumber(state.amazonInboxes.size)}",
-                    "محظور  ${arabicNumber(state.bannedInboxes.size)}",
+                    "بريد رسمي (@batabitoo.com)  ${arabicNumber(state.officialInboxes.size)}",
+                    "بريد سريع (مؤقت)  ${arabicNumber(state.tempInboxes.size)}",
                 ),
                 state.inboxFilter.ordinal,
             ) { viewModel.setInboxFilter(InboxFilter.entries[it]) }
@@ -392,7 +394,11 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
 }
 
 @Composable
-private fun MailUniverseHero(state: MailUiState, onSelectFilter: (InboxFilter) -> Unit) {
+private fun MailUniverseHero(
+    state: MailUiState,
+    onSelectFilter: (InboxFilter) -> Unit,
+    onNavigateToAmazon: () -> Unit,
+) {
     val motion = rememberInfiniteTransition(label = "mail universe")
     val tilt by motion.animateFloat(-8f, 8f, infiniteRepeatable(tween(3600), RepeatMode.Reverse), label = "tilt")
     val drift by motion.animateFloat(0f, 1f, infiniteRepeatable(tween(6000), RepeatMode.Restart), label = "drift")
@@ -459,11 +465,8 @@ private fun MailUniverseHero(state: MailUiState, onSelectFilter: (InboxFilter) -
                     InteractiveHeroChip("سريع", state.counts.temp, Cyan, state.inboxFilter == InboxFilter.TEMP) {
                         onSelectFilter(InboxFilter.TEMP)
                     }
-                    InteractiveHeroChip("أمازون", state.amazonInboxes.size, AmazonOrange, state.inboxFilter == InboxFilter.AMAZON) {
-                        onSelectFilter(InboxFilter.AMAZON)
-                    }
-                    InteractiveHeroChip("محظور", state.counts.banned, BannedRed, state.inboxFilter == InboxFilter.BANNED) {
-                        onSelectFilter(InboxFilter.BANNED)
+                    InteractiveHeroChip("مركز أمازون 🛒", state.amazonInboxes.size, AmazonOrange, false) {
+                        onNavigateToAmazon()
                     }
                 }
             }
@@ -702,13 +705,667 @@ private fun InboxRow(
 }
 
 @Composable
+private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    val allAmazonInboxes = state.amazonInboxes
+    val bannedAmazonInboxes = allAmazonInboxes.filter { it.isBanned }
+    val healthyAmazonInboxes = allAmazonInboxes.filter { !it.isBanned }
+    val amazonMessages = state.amazonMessages
+
+    val query = state.search.trim()
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 100.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            AmazonUniverseHero(
+                totalAccounts = allAmazonInboxes.size,
+                bannedAccounts = bannedAmazonInboxes.size,
+                messagesCount = amazonMessages.size,
+            )
+        }
+
+        item {
+            AmazonKpiSection(
+                total = allAmazonInboxes.size,
+                banned = bannedAmazonInboxes.size,
+                healthy = healthyAmazonInboxes.size,
+                messages = amazonMessages.size,
+                selectedTab = state.amazonTab,
+                onSelectTab = { viewModel.setAmazonTab(it) },
+            )
+        }
+
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("مركز المراقبة الذكي", color = Color(0xFFFF9900), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        when (state.amazonTab) {
+                            AmazonTab.ALL -> "جميع حسابات أمازون"
+                            AmazonTab.BANNED -> "الحسابات المقيدة والمحظورة ⛔"
+                            AmazonTab.HEALTHY -> "الحسابات النشطة السليمة ✅"
+                            AmazonTab.MESSAGES -> "رسائل وأكواد أمازون (OTP) 🔑"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            MailPills(
+                listOf(
+                    "الكل (${arabicNumber(allAmazonInboxes.size)})",
+                    "محظورة ⛔ (${arabicNumber(bannedAmazonInboxes.size)})",
+                    "سليمة ✅ (${arabicNumber(healthyAmazonInboxes.size)})",
+                    "رسائل 🔑 (${arabicNumber(amazonMessages.size)})",
+                ),
+                state.amazonTab.ordinal,
+            ) { viewModel.setAmazonTab(AmazonTab.entries[it]) }
+
+            Spacer(Modifier.height(8.dp))
+            SearchField(
+                state.search,
+                if (state.amazonTab == AmazonTab.MESSAGES) "ابحث في رسائل وأكواد أمازون..." else "ابحث في حسابات أمازون...",
+                viewModel::setSearch,
+            )
+            Spacer(Modifier.height(2.dp))
+        }
+
+        if (state.amazonTab == AmazonTab.MESSAGES) {
+            val filteredMessages = amazonMessages.filter {
+                query.isBlank() || listOf(it.subject, it.from, it.to, it.text, it.intro, it.otp, it.inboxEmail).any { value -> value.contains(query, true) }
+            }
+            if (filteredMessages.isEmpty()) {
+                item { EmptyList("لا توجد رسائل أمازون", "ستظهر هنا إشعارات وأوامر شراء وأكواد OTP القادمة من أمازون.") }
+            } else {
+                items(filteredMessages, key = { it.id }) { message ->
+                    AmazonMessageRow(
+                        message = message,
+                        onClick = { viewModel.openMessage(message) },
+                        onCopyOtp = { otp ->
+                            clipboard.setText(AnnotatedString(otp))
+                            android.widget.Toast.makeText(context, "تم نسخ كود التحقق: $otp", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                }
+            }
+        } else {
+            val baseList = when (state.amazonTab) {
+                AmazonTab.ALL -> allAmazonInboxes
+                AmazonTab.BANNED -> bannedAmazonInboxes
+                AmazonTab.HEALTHY -> healthyAmazonInboxes
+                AmazonTab.MESSAGES -> emptyList()
+            }
+            val filteredInboxes = baseList.filter {
+                query.isBlank() || listOf(it.email, it.personName, it.label, it.banReason).any { value -> value.contains(query, true) }
+            }
+            if (filteredInboxes.isEmpty()) {
+                item {
+                    EmptyList(
+                        if (state.amazonTab == AmazonTab.BANNED) "لا توجد حسابات محظورة" else "لا توجد حسابات مطابقة",
+                        if (state.amazonTab == AmazonTab.BANNED) "ممتاز! لم يتم رصد أي قيود أو حظر على حسابات أمازون الحالية." else "جرّب البحث بكلمات أخرى أو اختر تبويبًا مختلفًا."
+                    )
+                }
+            } else {
+                items(filteredInboxes, key = { it.id }) { inbox ->
+                    AmazonAccountCard(
+                        inbox = inbox,
+                        onCopyEmail = {
+                            clipboard.setText(AnnotatedString(inbox.email))
+                            android.widget.Toast.makeText(context, "تم نسخ البريد", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        onViewMessages = {
+                            viewModel.selectInbox(inbox)
+                            viewModel.setSection(MainSection.MESSAGES)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AmazonUniverseHero(
+    totalAccounts: Int,
+    bannedAccounts: Int,
+    messagesCount: Int,
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "amazonHero")
+    val floatOffset by infiniteTransition.animateFloat(
+        initialValue = -3f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "heroFloat",
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            Color(0xFF131921),
+                            Color(0xFF1F2A38),
+                            Color(0xFF232F3E),
+                        )
+                    )
+                )
+                .padding(18.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFFF9900).copy(alpha = 0.18f))
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF9900))
+                        )
+                        Text(
+                            text = "مركز أمازون الذكي",
+                            color = Color(0xFFFF9900),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .graphicsLayer { translationY = floatOffset }
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFFFF9900), Color(0xFFEA580C)))),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Rounded.ShoppingCart,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "إدارة ورصد حسابات أمازون",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                    Text(
+                        text = "كشف فوري للحظر والتقييد بالمشتريات الرقمية، تتبع الرسائل، واستخراج رموز التحقق OTP بلمسة واحدة.",
+                        color = Color(0xFF94A3B8),
+                        style = MaterialTheme.typography.bodySmall,
+                        lineHeight = 18.sp,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AmazonHeroStatPill(
+                        label = "الحسابات",
+                        value = arabicNumber(totalAccounts),
+                        color = Color.White,
+                        modifier = Modifier.weight(1f),
+                    )
+                    AmazonHeroStatPill(
+                        label = "المحظورة",
+                        value = arabicNumber(bannedAccounts),
+                        color = if (bannedAccounts > 0) Color(0xFFF87171) else Color(0xFF34D399),
+                        modifier = Modifier.weight(1f),
+                    )
+                    AmazonHeroStatPill(
+                        label = "الرسائل والأكواد",
+                        value = arabicNumber(messagesCount),
+                        color = Color(0xFFFFB74D),
+                        modifier = Modifier.weight(1.2f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AmazonHeroStatPill(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = value, color = color, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(text = label, color = Color(0xFF94A3B8), fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+private fun AmazonKpiSection(
+    total: Int,
+    banned: Int,
+    healthy: Int,
+    messages: Int,
+    selectedTab: AmazonTab,
+    onSelectTab: (AmazonTab) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AmazonKpiCard(
+            title = "الكل",
+            count = arabicNumber(total),
+            icon = Icons.Rounded.ShoppingCart,
+            accentColor = Color(0xFFFF9900),
+            selected = selectedTab == AmazonTab.ALL,
+            onClick = { onSelectTab(AmazonTab.ALL) },
+            modifier = Modifier.weight(1f),
+        )
+        AmazonKpiCard(
+            title = "المحظورة",
+            count = arabicNumber(banned),
+            icon = Icons.Rounded.Block,
+            accentColor = BannedRed,
+            selected = selectedTab == AmazonTab.BANNED,
+            onClick = { onSelectTab(AmazonTab.BANNED) },
+            modifier = Modifier.weight(1f),
+        )
+        AmazonKpiCard(
+            title = "السليمة",
+            count = arabicNumber(healthy),
+            icon = Icons.Rounded.CheckCircle,
+            accentColor = Green,
+            selected = selectedTab == AmazonTab.HEALTHY,
+            onClick = { onSelectTab(AmazonTab.HEALTHY) },
+            modifier = Modifier.weight(1f),
+        )
+        AmazonKpiCard(
+            title = "الرسائل",
+            count = arabicNumber(messages),
+            icon = Icons.Rounded.Bolt,
+            accentColor = Color(0xFF6366F1),
+            selected = selectedTab == AmazonTab.MESSAGES,
+            onClick = { onSelectTab(AmazonTab.MESSAGES) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun AmazonKpiCard(
+    title: String,
+    count: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accentColor: Color,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) accentColor.copy(alpha = 0.12f) else Surface
+        ),
+        border = BorderStroke(
+            width = if (selected) 1.5.dp else 1.dp,
+            color = if (selected) accentColor else CardBorderSubtle,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 2.dp else 0.5.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (selected) accentColor else Muted,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                text = count,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) accentColor else Ink,
+                fontSize = 16.sp,
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) accentColor else Muted,
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AmazonAccountCard(
+    inbox: Inbox,
+    onCopyEmail: () -> Unit,
+    onViewMessages: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Surface),
+        border = BorderStroke(1.dp, if (inbox.isBanned) BannedRed.copy(alpha = 0.3f) else CardBorderSubtle),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(
+                            if (inbox.isBanned) BannedLight
+                            else Color(0xFFFF9900).copy(alpha = 0.12f)
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (inbox.isBanned) Icons.Rounded.Block else Icons.Rounded.ShoppingCart,
+                        contentDescription = null,
+                        tint = if (inbox.isBanned) BannedRed else Color(0xFFFF9900),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = inbox.personName.ifBlank { "حساب أمازون" },
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    SelectionContainer {
+                        Text(
+                            text = inbox.email,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Muted,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onCopyEmail,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.ContentCopy,
+                        contentDescription = "نسخ البريد",
+                        tint = Muted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+
+            // Badges Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (inbox.isBanned) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(BannedLight)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(Icons.Rounded.Block, contentDescription = null, tint = BannedRed, modifier = Modifier.size(12.dp))
+                        Text(
+                            text = inbox.banReason.ifBlank { "مقتصر على المشتريات الرقمية" },
+                            color = BannedRed,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Green.copy(alpha = 0.1f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Green, modifier = Modifier.size(12.dp))
+                        Text(
+                            text = "سليم ونشط",
+                            color = Green,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+
+                Text(
+                    text = "${arabicNumber(inbox.messageCount)} رسائل",
+                    color = Muted,
+                    fontSize = 11.sp,
+                )
+            }
+
+            // Action row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                OutlinedButton(
+                    onClick = onViewMessages,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp),
+                ) {
+                    Icon(Icons.Rounded.MailOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("عرض الرسائل", fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AmazonMessageRow(
+    message: MailMessage,
+    onClick: () -> Unit,
+    onCopyOtp: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Surface),
+        border = BorderStroke(1.dp, if (message.isBanned) BannedRed.copy(alpha = 0.3f) else CardBorderSubtle),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(
+                        if (message.isBanned) BannedLight
+                        else Color(0xFFFF9900).copy(alpha = 0.12f)
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (message.isBanned) Icons.Rounded.Block else Icons.Rounded.ShoppingCart,
+                    contentDescription = null,
+                    tint = if (message.isBanned) BannedRed else Color(0xFFFF9900),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = SenderFormatter.format(message.from, message.subject),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Text(
+                        text = formatDate(message.createdAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Muted,
+                        fontSize = 10.sp,
+                    )
+                }
+
+                Text(
+                    text = message.subject.ifBlank { "(بدون عنوان)" },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                Row(
+                    modifier = Modifier.padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (message.isBanned) {
+                        Text(
+                            text = "⛔ ${message.banReason.ifBlank { "محظور" }}",
+                            color = BannedRed,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(BannedLight)
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        )
+                    }
+
+                    if (message.otp.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFD1FAE5))
+                                .clickable { onCopyOtp(message.otp) }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Rounded.Bolt,
+                                contentDescription = null,
+                                tint = Color(0xFF047857),
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text(
+                                text = "رمز: ${message.otp}",
+                                color = Color(0xFF047857),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Icon(
+                                Icons.Rounded.ContentCopy,
+                                contentDescription = null,
+                                tint = Color(0xFF047857),
+                                modifier = Modifier.size(10.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun MessagesScreen(state: MailUiState, viewModel: MailViewModel) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val source = when (state.messageFilter) {
         MessageFilter.CURRENT -> state.currentMessages
-        MessageFilter.AMAZON -> state.amazonMessages
-        MessageFilter.BANNED -> state.bannedMessages
         MessageFilter.OFFICIAL -> state.officialMessages
         MessageFilter.TEMP -> state.tempMessages
     }
@@ -745,11 +1402,9 @@ private fun MessagesScreen(state: MailUiState, viewModel: MailViewModel) {
             }
             MailPills(
                 listOf(
-                    "الحالي",
-                    "أمازون  ${if (state.amazonMessages.isNotEmpty()) arabicNumber(state.amazonMessages.size) else ""}".trim(),
-                    "محظور  ${if (state.bannedMessages.isNotEmpty()) arabicNumber(state.bannedMessages.size) else ""}".trim(),
-                    "رسمي",
-                    "سريع",
+                    "الصندوق الحالي",
+                    "البريد الرسمي",
+                    "البريد السريع",
                 ),
                 state.messageFilter.ordinal,
             ) {
@@ -894,7 +1549,7 @@ private fun MessageRow(message: MailMessage, onClick: () -> Unit, onCopyOtp: (St
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Text(
-                        message.from.ifBlank { "مرسل غير معروف" },
+                        SenderFormatter.format(message.from, message.subject),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = Ink,
@@ -1645,14 +2300,28 @@ private fun LoadingVeil() {
 
 @Composable
 private fun BottomDock(selected: MainSection, onSelect: (MainSection) -> Unit, onCreate: () -> Unit) {
-    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 14.dp, vertical = 8.dp).height(76.dp)) {
-        Card(Modifier.fillMaxWidth().height(72.dp).align(Alignment.BottomCenter), colors = CardDefaults.cardColors(containerColor = Surface.copy(alpha = .97f)), elevation = CardDefaults.cardElevation(12.dp), shape = RoundedCornerShape(25.dp)) {
-            Row(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 6.dp).height(74.dp)) {
+        Card(
+            Modifier.fillMaxWidth().height(68.dp).align(Alignment.BottomCenter),
+            colors = CardDefaults.cardColors(containerColor = Surface.copy(alpha = .98f)),
+            elevation = CardDefaults.cardElevation(10.dp),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 NavItem(MainSection.INBOXES, "الصناديق", Icons.Rounded.Inbox, selected, onSelect, Modifier.weight(1f))
-                NavItem(MainSection.MESSAGES, "الرسائل", Icons.Rounded.MailOutline, selected, onSelect, Modifier.weight(1f))
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    FloatingActionButton(onClick = onCreate, modifier = Modifier.size(54.dp), containerColor = Primary, contentColor = Color.White, shape = RoundedCornerShape(19.dp)) { Icon(Icons.Rounded.Add, "صندوق جديد", modifier = Modifier.size(28.dp)) }
+                NavItem(MainSection.AMAZON, "أمازون", Icons.Rounded.ShoppingCart, selected, onSelect, Modifier.weight(1f), activeColor = Color(0xFFFF9900))
+                Box(Modifier.weight(0.9f), contentAlignment = Alignment.Center) {
+                    FloatingActionButton(
+                        onClick = onCreate,
+                        modifier = Modifier.size(48.dp),
+                        containerColor = Primary,
+                        contentColor = Color.White,
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Rounded.Add, "صندوق جديد", modifier = Modifier.size(24.dp))
+                    }
                 }
+                NavItem(MainSection.MESSAGES, "الرسائل", Icons.Rounded.MailOutline, selected, onSelect, Modifier.weight(1f))
                 NavItem(MainSection.LOGS, "السجل", Icons.Rounded.ReceiptLong, selected, onSelect, Modifier.weight(1f))
             }
         }
@@ -1660,11 +2329,39 @@ private fun BottomDock(selected: MainSection, onSelect: (MainSection) -> Unit, o
 }
 
 @Composable
-private fun NavItem(section: MainSection, label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: MainSection, onSelect: (MainSection) -> Unit, modifier: Modifier) {
-    Column(modifier.fillMaxHeight().clip(RoundedCornerShape(18.dp)).clickable { onSelect(section) }.background(if (selected == section) Primary.copy(alpha = .08f) else Color.Transparent), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(icon, label, tint = if (selected == section) Primary else Muted, modifier = Modifier.size(23.dp)); Text(label, color = if (selected == section) Primary else Muted, style = MaterialTheme.typography.labelSmall)
+private fun NavItem(
+    section: MainSection,
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: MainSection,
+    onSelect: (MainSection) -> Unit,
+    modifier: Modifier,
+    activeColor: Color = Primary,
+) {
+    val isSelected = selected == section
+    val tint = if (isSelected) activeColor else Muted
+    Column(
+        modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { onSelect(section) }
+            .background(if (isSelected) activeColor.copy(alpha = .09f) else Color.Transparent),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(2.dp))
+        Text(
+            label,
+            color = tint,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1
+        )
     }
 }
+
 
 private fun arabicNumber(value: Int): String = java.text.NumberFormat.getIntegerInstance(Locale("ar", "SA")).format(value)
 private fun initials(value: String): String = value.replace(Regex("[<>@._-]"), " ").trim().split(Regex("\\s+")).filter { it.isNotBlank() }.take(2).joinToString("") { it.take(1) }.ifBlank { "@" }.uppercase()

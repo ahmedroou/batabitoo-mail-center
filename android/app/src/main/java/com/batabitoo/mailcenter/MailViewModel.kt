@@ -19,13 +19,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class MainSection { INBOXES, MESSAGES, LOGS, SETTINGS }
-enum class InboxFilter { OFFICIAL, TEMP, AMAZON, BANNED }
-enum class MessageFilter { CURRENT, AMAZON, BANNED, OFFICIAL, TEMP }
+enum class MainSection { INBOXES, AMAZON, MESSAGES, LOGS, SETTINGS }
+enum class InboxFilter { OFFICIAL, TEMP }
+enum class AmazonTab { ALL, BANNED, HEALTHY, MESSAGES }
+enum class MessageFilter { CURRENT, OFFICIAL, TEMP }
 
 data class MailUiState(
     val section: MainSection = MainSection.INBOXES,
     val inboxFilter: InboxFilter = InboxFilter.OFFICIAL,
+    val amazonTab: AmazonTab = AmazonTab.ALL,
     val messageFilter: MessageFilter = MessageFilter.CURRENT,
     val counts: Counts = Counts(),
     val officialInboxes: List<Inbox> = emptyList(),
@@ -348,6 +350,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setInboxFilter(value: InboxFilter) = _uiState.update { it.copy(inboxFilter = value, search = "") }
+    fun setAmazonTab(value: AmazonTab) = _uiState.update { it.copy(amazonTab = value, search = "") }
     fun setMessageFilter(value: MessageFilter) = _uiState.update { it.copy(messageFilter = value, search = "") }
     fun setSearch(value: String) = _uiState.update { it.copy(search = value) }
     fun setCreateVisible(value: Boolean) = _uiState.update { it.copy(showCreate = value) }
