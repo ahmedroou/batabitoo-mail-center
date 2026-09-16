@@ -17,17 +17,16 @@ const GEMINI_MODELS = [
   "gemini-3.7-flash"
 ];
 
-const DEFAULT_FALLBACK_KEY = "AIzaSyCJhS2taJ-gU_ej0W1CemXaCNySprmubZA";
 const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
 class GeminiAI {
   constructor(apiKey = "") {
-    this.apiKey = apiKey || (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) || DEFAULT_FALLBACK_KEY;
+    this.apiKey = apiKey || (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) || "";
     this.models = GEMINI_MODELS;
   }
 
   setApiKey(key) {
-    this.apiKey = String(key || "").trim() || DEFAULT_FALLBACK_KEY;
+    this.apiKey = String(key || "").trim();
   }
 
   async generateContent(prompt, options = {}) {
