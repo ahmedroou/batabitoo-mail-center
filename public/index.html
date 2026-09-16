@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
+  <meta name="description" content="مركز بريد بطابيطو لإدارة الصناديق والرسائل وأكواد التحقق">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="بريد بطابيطو">
+  <title>بريد بطابيطو</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css?v=7">
+  <link rel="stylesheet" href="/reader.css?v=1">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 9.5 16 4l11 5.5v13L16 28 5 22.5z"/><path d="m8 11 8 5 8-5M16 16v8"/></svg></div>
+        <div class="brand-copy"><span>صباح الخير 👋</span><h1>بريد بطابيطو</h1></div>
+      </div>
+      <div class="topbar-actions">
+        <div class="connection-pill" id="connection-pill"><span class="status-dot"></span><span id="connection-text">جاري الاتصال</span></div>
+        <button class="icon-button" id="refresh-all" aria-label="تحديث الكل" title="تحديث الكل"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg></button>
+        <button class="primary-button" id="new-inbox-top"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>صندوق جديد</span></button>
+      </div>
+    </header>
+
+    <section class="stats-strip" aria-label="ملخص النظام">
+      <article class="stat-card stat-main"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>كل الصناديق</span><strong id="stat-total">—</strong></div><small id="stat-sync">مزامنة آمنة</small></article>
+      <article class="stat-card"><div class="stat-icon gold"><svg viewBox="0 0 24 24"><path d="m5 16-1-9 5 4 3-6 3 6 5-4-1 9zM6 19h12"/></svg></div><div><span>الرسمي</span><strong id="stat-official">—</strong></div></article>
+      <article class="stat-card"><div class="stat-icon cyan"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg></div><div><span>السريع</span><strong id="stat-temp">—</strong></div></article>
+      <article class="stat-card"><div class="stat-icon amazon-stat"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg></div><div><span>أمازون</span><strong id="stat-amazon">—</strong></div></article>
+      <article class="stat-card"><div class="stat-icon banned-stat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></div><div><span>المحظور</span><strong id="stat-banned">—</strong></div></article>
+      <article class="stat-card"><div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>الرسائل</span><strong id="stat-messages">—</strong></div></article>
+    </section>
+
+    <main class="workspace">
+      <aside class="sidebar" id="sidebar">
+        <div class="panel-heading"><div><span class="section-kicker">حساباتك</span><h2>صناديق البريد</h2></div><button class="mini-add" id="new-inbox-side" aria-label="إضافة صندوق"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="segmented" id="inbox-filter"><button class="active" data-inbox-type="official"><span>رسمي</span><b id="official-count">0</b></button><button data-inbox-type="temp"><span>سريع</span><b id="temp-count">0</b></button><button data-inbox-type="amazon"><span>أمازون</span><b id="amazon-count">0</b></button><button data-inbox-type="banned"><span>محظور</span><b id="banned-count">0</b></button></div>
+        <label class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="inbox-search" type="search" placeholder="ابحث عن صندوق"></label>
+        <div class="inbox-list" id="inbox-list"><div class="skeleton-list"></div></div>
+      </aside>
+
+      <section class="content-panel" id="content-panel">
+        <div class="active-inbox-bar">
+          <div class="active-orb one"></div><div class="active-orb two"></div>
+          <canvas id="mail-scene" aria-hidden="true"></canvas>
+          <div class="scene-fallback" aria-hidden="true"><span></span><i></i></div>
+          <div class="active-head"><span class="active-label">الصندوق النشط</span><span class="active-live"><i></i> يستقبل الآن</span></div>
+          <div class="active-identity"><div class="inbox-avatar" id="active-avatar">@</div><div class="active-copy"><div class="active-meta"><span id="active-badge">الصندوق الحالي</span><i id="active-host"></i></div><h2 id="active-email">اختر صندوق بريد</h2></div></div>
+          <div class="active-actions"><button class="soft-button" id="copy-email" disabled><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>نسخ البريد</span></button><button class="soft-button accent" id="refresh-current"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg><span>تحديث الوارد</span></button></div>
+        </div>
+        <div class="feed-shell" id="feed-shell">
+          <div class="content-tabs" id="content-tabs"><button class="active" data-view="current">الوارد <b id="current-message-count">0</b></button><button data-view="amazon">أمازون <b id="amazon-message-count">0</b></button><button data-view="banned">محظور <b id="banned-message-count">0</b></button><button data-view="official">رسمي <b id="official-message-count">0</b></button><button data-view="temp">سريع <b id="temp-message-count">0</b></button><button data-view="logs">السجل <b id="logs-count">0</b></button></div>
+          <div class="list-toolbar"><div><span class="section-kicker" id="view-kicker">البريد الوارد</span><h2 id="view-title">أحدث الرسائل</h2></div><label class="search-box compact"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="content-search" type="search" placeholder="بحث في الرسائل"></label></div>
+          <div class="message-list" id="message-list"><div class="skeleton-list wide"></div></div>
+          <div class="empty-state hidden" id="empty-state"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><h3>الوارد هادئ الآن</h3><p>ستظهر الرسائل الجديدة هنا فور وصولها.</p></div>
+        </div>
+
+        <section class="reader-shell hidden" id="reader-shell" aria-label="عرض الرسالة الكاملة">
+          <div class="reader-navbar">
+            <button class="reader-back-btn" id="reader-back-btn" type="button" aria-label="الرجوع للرسائل">
+              <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+              <span>الرجوع للرسائل</span>
+            </button>
+            <div class="reader-actions">
+              <button class="reader-tool" id="reader-retry-btn" type="button" aria-label="إعادة تحميل الرسالة"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg></button>
+              <button class="soft-button" id="reader-copy-all-btn" type="button" title="نسخ نص الرسالة">
+                <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+                <span>نسخ النص</span>
+              </button>
+            </div>
+          </div>
+
+          <article class="reader-header-card">
+            <div class="reader-title-area">
+              <span class="reader-tag">رسالة واردة</span>
+              <h1 class="reader-subject" id="reader-subject" tabindex="-1">—</h1>
+            </div>
+
+            <details class="reader-envelope" open><summary>تفاصيل المرسل والمستلم</summary><div class="reader-meta-grid">
+              <div class="reader-meta-item">
+                <div class="sender-avatar" id="reader-avatar">@</div>
+                <div class="reader-meta-copy">
+                  <span class="meta-label">المرسل</span>
+                  <strong id="reader-from">—</strong>
+                </div>
+              </div>
+              <div class="reader-meta-item">
+                <div class="reader-meta-copy">
+                  <span class="meta-label">المستلم</span>
+                  <strong id="reader-to">—</strong>
+                </div>
+              </div>
+              <div class="reader-meta-item">
+                <div class="reader-meta-copy">
+                  <span class="meta-label">تاريخ الاستلام</span>
+                  <strong id="reader-date">—</strong>
+                </div>
+              </div>
+            </div></details>
+
+            <div class="reader-otp-banner hidden" id="reader-otp-banner">
+              <div class="otp-banner-left">
+                <span class="otp-badge-title">⚡ كود التحقق السريع (OTP)</span>
+                <strong class="otp-display-code" id="reader-otp">—</strong>
+              </div>
+              <button class="otp-action-btn" id="reader-copy-otp-btn" type="button">
+                <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+                <span>نسخ الرمز</span>
+              </button>
+            </div>
+          </article>
+
+          <div class="reader-notice hidden" id="reader-notice" role="status"></div>
+          <section class="reader-attachments hidden" id="reader-attachments" aria-label="مرفقات الرسالة"></section>
+          <div class="reader-content-card" aria-busy="true">
+            <div class="reader-paper-label"><span>محتوى الرسالة</span><span id="reader-content-status" role="status">جاري التحميل…</span></div>
+            <iframe id="reader-frame" title="محتوى الرسالة الكامل" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <nav class="mobile-nav" id="mobile-nav">
+    <button class="active" data-mobile-view="inboxes"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 14h4l2 2h4l2-2h4"/></svg><span>الصناديق</span></button>
+    <button data-mobile-view="messages"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg><span>الرسائل</span></button>
+    <button class="mobile-create" data-mobile-view="create" aria-label="صندوق جديد"><i><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></i><span>جديد</span></button>
+    <button data-mobile-view="logs"><svg viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></svg><span>السجل</span></button>
+  </nav>
+
+  <div class="modal-backdrop hidden" id="create-modal" role="dialog" aria-modal="true"><article class="modal-card create-card"><div class="sheet-handle"></div><header class="modal-header"><div><span class="section-kicker">خطوة واحدة</span><h2>صندوق بريد جديد</h2><p>اختر النوع وأعطه اسمًا واضحًا.</p></div><button class="icon-button" data-close-modal="create" aria-label="إغلاق">×</button></header><div class="type-picker" id="create-type"><button class="active official-choice" data-create-type="official"><span class="choice-icon">♛</span><strong>بريد رسمي</strong><small>@batabitoo.com</small></button><button data-create-type="temp"><span class="choice-icon">ϟ</span><strong>بريد سريع</strong><small>جاهز بلحظات</small></button></div><button type="button" class="seq-chip" id="seq-official-btn"><span class="seq-chip-title"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg> بريد رسمي تتابعي (ahmedroou)</span><b id="seq-preview">ahmedroou</b></button><form id="create-form"><label class="field"><span>اسم الحساب</span><input id="create-name" autocomplete="off" placeholder="مثال: حساب أمازون"></label><label class="field"><span>عنوان البريد</span><div class="prefix-field"><input id="create-prefix" dir="ltr" autocomplete="off" placeholder="amazon.account"><b id="prefix-suffix">@batabitoo.com</b></div><small>الأحرف الإنجليزية والأرقام والنقطة فقط.</small></label><button class="submit-button" id="create-submit" type="submit"><span>إنشاء الصندوق</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></form></article></div>
+
+  <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
+  <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
+  <script type="module" src="/mail-scene.js?v=2"></script>
+  <script src="/app.js?v=8" defer></script>
+</body>
+</html>

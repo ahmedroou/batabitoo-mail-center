@@ -1,0 +1,20 @@
+{
+  "name": "مركز بريد بطابيطو السحابي",
+  "short_name": "بريد بطابيطو",
+  "description": "نظام إدارة صناديق البريد الرسمي والمؤقت واستخراج أكواد التحقق OTP لحظياً",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6fb",
+  "theme_color": "#f4f6fb",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Secrets and Keys
+serviceAccountKey.json
+.env
+.env.*
+
+# Local Database & Live User Data
+inboxes_db.json
+inboxes_db.*.json
+*.backup.json
+results_nivea_live.json
+results_nivea_live.*.json
+private/
+.mail-tests/
+
+# Binaries & Releases (hosted on GitHub Releases)
+*.apk
+*.exe
+cloudflared.exe
+
+# Android build & caches
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+
+# Firebase local cache
+.firebase/
+
+# Previews and testing artifacts
+.preview-chrome*/
+web-preview-*.png
+

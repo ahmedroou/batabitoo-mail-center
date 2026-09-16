@@ -1,0 +1,837 @@
+'use strict';
+
+const API_BASE = /(?:web\.app|firebaseapp\.com)$/.test(location.hostname) ? 'https://inbox-api.batabitoo.com' : '';
+let readerRequest = 0;
+let stopReaderResize = () => {};
+let readerReturnScroll = 0;
+let readerReturnFocus;
+
+const state = {
+  activeId: null,
+  activeInbox: null,
+  inboxType: 'official',
+  view: 'current',
+  createType: 'official',
+  official: [],
+  temp: [],
+  amazon: [],
+  banned: [],
+  messages: [],
+  officialMessages: [],
+  tempMessages: [],
+  amazonMessages: [],
+  bannedMessages: [],
+  logs: [],
+  currentMessage: null,
+  pendingDeleteId: null,
+  loading: false
+};
+let inboxLimit = 40;
+const mobileLayout = matchMedia('(max-width: 720px)');
+function placeHero() {
+  const hero = document.querySelector('.active-inbox-bar');
+  const workspace = document.querySelector('.workspace');
+  const inAccounts = mobileLayout.matches && !workspace.classList.contains('show-content');
+  if (hero) {
+    (inAccounts ? $('sidebar') : $('content-panel')).prepend(hero);
+  }
+  if (state.currentMessage) {
+    document.body.dataset.screen = 'reader';
+  } else {
+    document.body.dataset.screen = inAccounts ? 'inboxes' : state.view === 'logs' ? 'logs' : 'messages';
+  }
+  document.dispatchEvent(new Event('mail-layout-change'));
+}
+
+const $ = id => document.getElementById(id);
+
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
+  bindEvents();
+  placeHero();
+  mobileLayout.addEventListener('change', placeHero);
+  const hour = new Date().getHours();
+  document.querySelector('.brand-copy > span').textContent = hour < 12 ? 'صباح الخير 👋' : 'مساء الخير 👋';
+  updateActiveInbox();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  await refreshEverything();
+  setInterval(() => {
+    if (!document.hidden && state.view === 'current' && !state.currentMessage) loadCurrent(true);
+  }, 8000);
+}
+
+function bindEvents() {
+  $('refresh-all').addEventListener('click', refreshEverything);
+  $('refresh-current').addEventListener('click', () => loadCurrent(false));
+  $('copy-email').addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد'));
+  $('new-inbox-top').addEventListener('click', openCreateModal);
+  $('new-inbox-side').addEventListener('click', openCreateModal);
+  $('inbox-search').addEventListener('input', () => { inboxLimit = 40; renderInboxes(); });
+  $('content-search').addEventListener('input', renderContent);
+  $('inbox-filter').addEventListener('click', event => {
+    const button = event.target.closest('[data-inbox-type]');
+    if (!button) return;
+    state.inboxType = button.dataset.inboxType;
+    inboxLimit = 40;
+    $('inbox-search').value = '';
+    document.querySelectorAll('[data-inbox-type]').forEach(item => item.classList.toggle('active', item === button));
+    renderInboxes();
+  });
+  $('content-tabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-view]');
+    if (!button) return;
+    switchContentView(button.dataset.view);
+  });
+  $('inbox-list').addEventListener('click', event => {
+    if (event.target.closest('[data-load-more]')) {
+      inboxLimit += 40;
+      renderInboxes();
+      return;
+    }
+    const remove = event.target.closest('[data-delete-id]');
+    if (remove) {
+      event.stopPropagation();
+      askDelete(decodeURIComponent(remove.dataset.deleteId));
+      return;
+    }
+    const item = event.target.closest('[data-inbox-id]');
+    if (item) selectInbox(decodeURIComponent(item.dataset.inboxId));
+  });
+  $('message-list').addEventListener('click', event => {
+    const otp = event.target.closest('[data-copy-otp]');
+    if (otp) {
+      event.stopPropagation();
+      copyText(decodeURIComponent(otp.dataset.copyOtp), 'تم نسخ رمز التحقق');
+      return;
+    }
+    const message = event.target.closest('[data-message-id]');
+    if (message) openMessage(decodeURIComponent(message.dataset.messageId));
+  });
+
+  // Dedicated Message Reader Navigation & Actions
+  $('reader-back-btn')?.addEventListener('click', () => closeReader());
+  $('reader-retry-btn')?.addEventListener('click', () => { if (state.currentMessage?.id) openMessage(state.currentMessage.id, false); });
+  $('reader-copy-otp-btn')?.addEventListener('click', () => copyText(state.currentMessage?.otp, 'تم نسخ رمز التحقق'));
+  $('reader-copy-all-btn')?.addEventListener('click', () => {
+    const text = state.currentMessage?.text || state.currentMessage?.intro || state.currentMessage?.subject || '';
+    copyText(text, 'تم نسخ نص الرسالة');
+  });
+
+  window.addEventListener('popstate', event => {
+    if (event.state?.screen === 'reader') openMessage(event.state.messageId, false);
+    else if (state.currentMessage) closeReader(false);
+  });
+
+  document.querySelectorAll('[data-close-modal]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.closeModal)));
+  document.querySelectorAll('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => {
+    if (event.target === backdrop) backdrop.classList.add('hidden');
+  }));
+  $('create-type').addEventListener('click', event => {
+    const button = event.target.closest('[data-create-type]');
+    if (!button) return;
+    state.createType = button.dataset.createType;
+    document.querySelectorAll('[data-create-type]').forEach(item => item.classList.toggle('active', item === button));
+    $('prefix-suffix').textContent = state.createType === 'official' ? '@batabitoo.com' : '@نطاق سريع';
+  });
+  $('seq-official-btn').addEventListener('click', () => {
+    const next = getNextSequentialPrefix('ahmedroou');
+    state.createType = 'official';
+    document.querySelectorAll('[data-create-type]').forEach(item => item.classList.toggle('active', item.dataset.createType === 'official'));
+    $('prefix-suffix').textContent = '@batabitoo.com';
+    $('create-prefix').value = next;
+    if (!$('create-name').value || $('create-name').value.startsWith('ahmedroou')) {
+      $('create-name').value = next;
+    }
+    $('seq-preview').textContent = next;
+    toast(`تم تجهيز البريد: ${next}@batabitoo.com`);
+  });
+  $('create-form').addEventListener('submit', createInbox);
+  $('cancel-delete').addEventListener('click', () => $('confirm-delete').classList.add('hidden'));
+  $('accept-delete').addEventListener('click', deleteInbox);
+  $('mobile-nav').addEventListener('click', event => {
+    const button = event.target.closest('[data-mobile-view]');
+    if (!button) return;
+    const target = button.dataset.mobileView;
+    if (target === 'create') {
+      openCreateModal();
+      return;
+    }
+    if (state.currentMessage) closeReader(false);
+    document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item === button));
+    if (target === 'inboxes') {
+      document.querySelector('.workspace').classList.remove('show-content');
+    } else {
+      document.querySelector('.workspace').classList.add('show-content');
+      if (target === 'logs') switchContentView('logs');
+      else if (state.view === 'logs') switchContentView('current');
+    }
+    placeHero();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target.closest('article[data-inbox-id], article[data-message-id]');
+    if (row && event.target === row) { event.preventDefault(); row.click(); }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      if (state.currentMessage) {
+        closeReader();
+        return;
+      }
+      document.querySelectorAll('.modal-backdrop').forEach(item => item.classList.add('hidden'));
+    }
+  });
+}
+
+async function api(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(API_BASE + path, { ...options, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function refreshEverything() {
+  if (state.loading) return;
+  state.loading = true;
+  $('refresh-all').classList.add('spin');
+  try {
+    await Promise.all([loadStatus(), loadInboxes(), loadCounts(), loadLogs(false)]);
+    if (state.view === 'current') await loadCurrent(true);
+    else if (state.view === 'official' || state.view === 'temp' || state.view === 'amazon' || state.view === 'banned') await loadSeparated(state.view);
+    else renderContent();
+    setConnection(true);
+    toast('تم تحديث جميع البيانات');
+  } catch (error) {
+    setConnection(false);
+    toast(friendlyError(error), true);
+  } finally {
+    state.loading = false;
+    $('refresh-all').classList.remove('spin');
+  }
+}
+
+async function loadStatus() {
+  const data = await api('/api/status');
+  $('stat-total').textContent = formatNumber(data.counts?.totalInboxes);
+  $('stat-official').textContent = formatNumber(data.counts?.official);
+  $('stat-temp').textContent = formatNumber(data.counts?.temp);
+  if ($('stat-amazon')) $('stat-amazon').textContent = formatNumber(data.counts?.amazon || 0);
+  if ($('stat-banned')) $('stat-banned').textContent = formatNumber(data.counts?.banned || 0);
+  $('stat-messages').textContent = formatNumber(data.counts?.messages);
+  $('stat-sync').textContent = data.cloudConnected ? 'متصل بسحابة Firebase' : 'يعمل من التخزين المحلي';
+  setConnection(true, data.cloudConnected);
+}
+
+async function loadInboxes() {
+  const data = await api('/api/inboxes');
+  state.official = (data.official || []).map(i => ({
+    ...i,
+    isBanned: isBannedInbox(i),
+    isAmazon: isAmazonInbox(i)
+  }));
+  state.temp = data.temp || [];
+  state.amazon = (data.amazon || state.official.filter(i => i.isAmazon)).map(i => ({ ...i, isAmazon: true }));
+  state.banned = (data.banned || state.official.filter(i => i.isBanned)).map(i => ({ ...i, isBanned: true, isAmazon: true }));
+  state.activeId = data.activeId || state.activeId;
+  $('official-count').textContent = formatNumber(state.official.length);
+  $('temp-count').textContent = formatNumber(state.temp.length);
+  if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
+  if ($('banned-count')) $('banned-count').textContent = formatNumber(state.banned.length);
+  renderInboxes();
+}
+
+async function loadCounts() {
+  const data = await api('/api/all-messages');
+  state.officialMessages = (data.official || []).map(m => ({
+    ...m,
+    isBanned: isBannedMessage(m),
+    isAmazon: isAmazonMessage(m)
+  }));
+  state.tempMessages = data.temp || [];
+  state.amazonMessages = (data.amazon || state.officialMessages.filter(m => m.isAmazon)).map(m => ({ ...m, isAmazon: true }));
+  state.bannedMessages = (data.banned || state.officialMessages.filter(m => m.isBanned)).map(m => ({ ...m, isBanned: true, isAmazon: true }));
+  $('official-message-count').textContent = formatNumber(data.counts?.official || 0);
+  $('temp-message-count').textContent = formatNumber(data.counts?.temp || 0);
+  if ($('amazon-message-count')) $('amazon-message-count').textContent = formatNumber(data.counts?.amazon || state.amazonMessages.length);
+  if ($('banned-message-count')) $('banned-message-count').textContent = formatNumber(data.counts?.banned || state.bannedMessages.length);
+  $('stat-messages').textContent = formatNumber(data.counts?.total || 0);
+}
+
+async function loadCurrent(silent = false) {
+  if (!silent) setBusy($('refresh-current'), true);
+  try {
+    const data = await api('/api/inbox/current');
+    state.activeInbox = data.inbox || null;
+    state.activeId = state.activeInbox?.id || state.activeId;
+    state.messages = (data.messages || []).map(m => ({
+      ...m,
+      isBanned: isBannedMessage(m),
+      isAmazon: isAmazonMessage(m)
+    }));
+    $('current-message-count').textContent = formatNumber(state.messages.length);
+    updateActiveInbox();
+    renderInboxes();
+    if (state.view === 'current') renderContent();
+    setConnection(true);
+    if (!silent) toast('تم فحص البريد الوارد');
+  } catch (error) {
+    setConnection(false);
+    if (!silent) toast(friendlyError(error), true);
+  } finally {
+    if (!silent) setBusy($('refresh-current'), false);
+  }
+}
+
+async function loadSeparated(type) {
+  showContentSkeleton();
+  try {
+    const data = await api(`/api/all-messages?type=${encodeURIComponent(type)}`);
+    if (type === 'official') state.officialMessages = (data.messages || []).map(m => ({ ...m, isBanned: isBannedMessage(m), isAmazon: isAmazonMessage(m) }));
+    else if (type === 'amazon') state.amazonMessages = (data.messages || []).map(m => ({ ...m, isAmazon: true }));
+    else if (type === 'banned') state.bannedMessages = (data.messages || []).map(m => ({ ...m, isBanned: true, isAmazon: true }));
+    else state.tempMessages = data.messages || [];
+    renderContent();
+  } catch (error) {
+    showEmpty('تعذر تحميل الرسائل', friendlyError(error));
+  }
+}
+
+async function loadLogs(shouldRender = true) {
+  const data = await api('/api/nivea/logs');
+  state.logs = data.submissions || [];
+  $('logs-count').textContent = formatNumber(state.logs.length);
+  if (shouldRender && state.view === 'logs') renderContent();
+}
+
+function renderInboxes() {
+  const source = state.inboxType === 'official' ? state.official : state.inboxType === 'amazon' ? state.amazon : state.inboxType === 'banned' ? state.banned : state.temp;
+  const query = normalize($('inbox-search').value);
+  const list = query ? source.filter(item => normalize([item.personName, item.label, item.email, item.domain, item.banReason].join(' ')).includes(query)) : source;
+  if (!list.length) {
+    $('inbox-list').innerHTML = `<div class="empty-state"><div class="empty-icon">@</div><h3>لا توجد صناديق</h3><p>${query ? 'غيّر عبارة البحث وحاول مجددًا.' : 'أنشئ صندوقًا جديدًا للبدء.'}</p></div>`;
+    return;
+  }
+  const markup = list.slice(0, inboxLimit).map(inbox => {
+    const official = isOfficial(inbox);
+    const banned = isBannedInbox(inbox);
+    const amazon = isAmazonInbox(inbox);
+    const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
+    const id = encodeURIComponent(inbox.id || '');
+    const reason = inbox.banReason || 'محظور';
+    return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''}" data-inbox-id="${attr(id)}">
+      <div class="inbox-item-avatar">${banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(label)}</div>
+      <div class="inbox-item-copy">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <strong>${html(label)}</strong>
+          ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
+        </div>
+        <span>${html(inbox.email || '')}</span>
+      </div>
+      <span class="inbox-count">${formatNumber(inbox.messageCount || 0)}</span>
+      <button class="inbox-more" data-delete-id="${attr(id)}" title="حذف الصندوق" aria-label="حذف الصندوق"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg></button>
+    </article>`;
+  }).join('') + (list.length > inboxLimit ? `<button class="load-more" data-load-more>عرض المزيد · ${formatNumber(list.length - inboxLimit)} صندوق متبقٍ</button>` : '');
+  if ($('inbox-list').innerHTML !== markup) $('inbox-list').innerHTML = markup;
+}
+
+function updateActiveInbox() {
+  const inbox = state.activeInbox;
+  const live = document.querySelector('.active-live');
+  live.hidden = !inbox;
+  document.querySelector('.active-label').textContent = inbox ? 'الصندوق النشط' : 'مساحتك البريدية';
+  if (!inbox) {
+    $('active-email').textContent = 'اختر صندوق بريد';
+    $('active-badge').textContent = 'كل بريدك في مكان واحد';
+    $('active-host').textContent = '';
+    $('active-avatar').textContent = '@';
+    $('copy-email').disabled = true;
+    return;
+  }
+  const official = isOfficial(inbox);
+  const banned = isBannedInbox(inbox);
+  const amazon = isAmazonInbox(inbox);
+  $('active-email').textContent = inbox.email || '—';
+  $('active-host').textContent = inbox.host || inbox.domain || '';
+  $('active-badge').textContent = banned ? `⛔ محظور (${inbox.banReason || 'مقيد'})` : amazon ? '🛒 حساب أمازون' : official ? '♛ بريد رسمي' : 'ϟ بريد سريع';
+  $('active-badge').style.color = banned ? '#dc2626' : amazon ? '#ea580c' : official ? 'var(--gold)' : 'var(--green)';
+  $('active-avatar').textContent = banned ? '⛔' : amazon ? '🛒' : official ? '♛' : initials(inbox.personName || inbox.label || inbox.email);
+  $('active-avatar').classList.toggle('official', official);
+  $('copy-email').disabled = !inbox.email;
+}
+
+async function selectInbox(id) {
+  state.activeId = id;
+  renderInboxes();
+  try {
+    await api('/api/inboxes/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    await loadCurrent(true);
+    switchContentView('current');
+    if (innerWidth <= 720) {
+      document.querySelector('.workspace').classList.add('show-content');
+      document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'messages'));
+    }
+    placeHero();
+  } catch (error) {
+    toast(friendlyError(error), true);
+  }
+}
+
+function switchContentView(view) {
+  if (state.currentMessage) closeReader(false);
+  state.view = view;
+  placeHero();
+  $('content-search').value = '';
+  document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+  const map = {
+    current: ['البريد الوارد', 'أحدث الرسائل', 'بحث في الرسائل'],
+    amazon: ['بريد أمازون', 'رسائل ورموز أمازون', 'بحث في رسائل أمازون'],
+    banned: ['الحسابات المحظورة', 'رسائل الحظر والتقييد بالمشتريات الرقمية', 'بحث في رسائل الحظر والتقييد'],
+    official: ['البريد الرسمي', 'رسائل النطاق الرسمي', 'بحث في الرسائل الرسمية'],
+    temp: ['البريد السريع', 'رسائل النطاقات المؤقتة', 'بحث في الرسائل السريعة'],
+    logs: ['سجل الحملة', 'تسجيلات نيفيا', 'بحث بالاسم أو الجوال']
+  };
+  [$('view-kicker').textContent, $('view-title').textContent, $('content-search').placeholder] = map[view] || map.current;
+  if (view === 'official' || view === 'temp' || view === 'amazon' || view === 'banned') loadSeparated(view);
+  else if (view === 'logs') loadLogs(true).catch(error => showEmpty('تعذر تحميل السجل', friendlyError(error)));
+  else renderContent();
+}
+
+function renderContent() {
+  const query = normalize($('content-search').value);
+  if (state.view === 'logs') {
+    const logs = query ? state.logs.filter(item => normalize([item.personName, item.realEmail, item.mobile, item.receiptNumber, item.city].join(' ')).includes(query)) : state.logs;
+    renderLogs(logs);
+    return;
+  }
+  const source = state.view === 'current' ? state.messages : state.view === 'banned' ? state.bannedMessages : state.view === 'amazon' ? state.amazonMessages : state.view === 'official' ? state.officialMessages : state.tempMessages;
+  const list = query ? source.filter(message => normalize([formatAddress(message.from), formatAddress(message.to), message.subject, message.text, message.intro, message.otp, message.inboxEmail].join(' ')).includes(query)) : source;
+  renderMessages(list);
+}
+
+function renderMessages(messages) {
+  if (!messages.length) return showEmpty('لا توجد رسائل بعد', 'ستظهر الرسائل الجديدة تلقائيًا عند وصولها.');
+  hideEmpty();
+  $('message-list').innerHTML = messages.map(message => {
+    const sender = formatAddress(message.from) || 'مرسل غير معروف';
+    const otp = message.otp ? String(message.otp) : '';
+    const banned = isBannedMessage(message);
+    const amazon = !banned && isAmazonMessage(message);
+    const reason = getBanReason(message);
+    return `<article class="message-card" data-message-id="${attr(encodeURIComponent(message.id || ''))}">
+      <div class="sender-avatar">${banned ? '⛔' : amazon ? '🛒' : initials(sender)}</div>
+      <div class="message-main">
+        <div class="message-top">
+          <strong style="display:inline-flex;align-items:center;gap:6px;">
+            ${html(sender)}
+            ${banned ? `<span class="banned-badge">⛔ ${html(reason)}</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
+          </strong>
+          <time>${html(formatDate(message.createdAt))}</time>
+        </div>
+        <div class="message-subject">${html(message.subject || '(بدون عنوان)')}</div>
+        <div class="message-preview">${html(message.intro || message.text || formatAddress(message.to) || '')}</div>
+      </div>
+      ${otp ? `<button class="otp-chip" data-copy-otp="${attr(encodeURIComponent(otp))}"><span>رمز التحقق</span><strong>${html(otp)}</strong></button>` : '<span class="message-arrow">←</span>'}
+    </article>`;
+  }).join('');
+}
+
+function renderLogs(logs) {
+  if (!logs.length) return showEmpty('لا توجد تسجيلات', 'ستظهر عمليات التسجيل المكتملة في هذا السجل.');
+  hideEmpty();
+  $('message-list').innerHTML = [...logs].reverse().map(log => `<article class="message-card log-card">
+    <div class="log-index">#${html(log.index)}</div>
+    <div class="message-main"><div class="message-top"><strong>${html(log.personName || 'مشارك')}</strong><time>${html(formatDate(log.registeredAt))}</time></div><div class="message-subject">${html(log.realEmail || '')}</div><div class="log-details">${html(log.mobile || '')} · <b>${html(log.city || '')}</b></div></div>
+    <div class="receipt"><span>رقم الفاتورة</span><strong>${html(log.receiptNumber || '—')}</strong></div>
+  </article>`).join('');
+}
+
+async function openMessage(id, pushHistory = true) {
+  const request = ++readerRequest;
+  if (!state.currentMessage) {
+    readerReturnScroll = window.scrollY;
+    readerReturnFocus = document.activeElement;
+  }
+  if (pushHistory) history.pushState({ screen: 'reader', messageId: id }, '');
+  stopReaderResize();
+  state.currentMessage = { id };
+  $('feed-shell')?.classList.add('hidden');
+  $('reader-shell')?.classList.remove('hidden');
+  document.body.dataset.screen = 'reader';
+  document.dispatchEvent(new Event('mail-layout-change'));
+  if (mobileLayout.matches) {
+    document.querySelector('.workspace')?.classList.add('show-content');
+  }
+
+  $('reader-subject').textContent = 'جاري تحميل الرسالة…';
+  $('reader-from').textContent = '—';
+  $('reader-to').textContent = '—';
+  $('reader-date').textContent = '—';
+  $('reader-avatar').textContent = '@';
+  $('reader-otp-banner')?.classList.add('hidden');
+  $('reader-notice').classList.add('hidden');
+  $('reader-attachments').classList.add('hidden');
+  $('reader-attachments').replaceChildren();
+  $('reader-copy-all-btn').disabled = true;
+  $('reader-retry-btn').disabled = true;
+  document.querySelector('.reader-content-card').setAttribute('aria-busy', 'true');
+  $('reader-content-status').textContent = 'جاري التحميل…';
+
+  const frame = $('reader-frame');
+  if (frame) {
+    frame.onload = null;
+    frame.style.height = '320px';
+    frame.srcdoc = loadingDocument();
+  }
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  try {
+    const message = await api(`/api/messages/${encodeURIComponent(id)}`);
+    if (request !== readerRequest || state.currentMessage?.id !== id) return;
+    state.currentMessage = message;
+
+    const sender = formatAddress(message.from) || 'مرسل غير معروف';
+    const recipient = formatAddress(message.to) || message.inboxEmail || state.activeInbox?.email || '—';
+
+    $('reader-subject').textContent = message.subject || '(بدون عنوان)';
+    $('reader-from').textContent = sender;
+    $('reader-to').textContent = recipient;
+    $('reader-date').textContent = formatDate(message.createdAt, true);
+    $('reader-avatar').textContent = initials(sender);
+    $('reader-copy-all-btn').disabled = !message.text;
+    $('reader-subject').focus({ preventScroll: true });
+    if (message.bodyStatus === 'unavailable') {
+      $('reader-notice').textContent = 'النسخة المحفوظة لهذه الرسالة ناقصة من المصدر؛ لا يتوفر محتواها الأصلي لعرضه.';
+      $('reader-notice').classList.remove('hidden');
+    }
+    const attachments = (message.attachments || []).filter(item => !item.inline);
+    $('reader-attachments').innerHTML = attachments.map(item => `<a class="reader-attachment" href="${API_BASE}/api/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg><span><strong>${html(item.filename || 'مرفق')}</strong><small>${Math.max(1, Math.ceil((item.size || 0) / 1024))} KB</small></span></a>`).join('');
+    $('reader-attachments').classList.toggle('hidden', !attachments.length);
+
+    if (message.otp) {
+      $('reader-otp').textContent = message.otp;
+      $('reader-otp-banner')?.classList.remove('hidden');
+    } else {
+      $('reader-otp-banner')?.classList.add('hidden');
+    }
+
+    if (frame) {
+      frame.onload = () => {
+        if (request !== readerRequest) return;
+        try {
+          const doc = frame.contentDocument || frame.contentWindow.document;
+          if (doc) {
+            let animationFrame = 0;
+            const adjust = () => {
+              cancelAnimationFrame(animationFrame);
+              animationFrame = requestAnimationFrame(() => {
+                if (request !== readerRequest) return;
+                const h = Math.ceil(doc.body.getBoundingClientRect().height);
+                const target = Math.min(30000, Math.max(320, h + 4));
+                if (Math.abs(parseInt(frame.style.height, 10) - target) > 2) frame.style.height = `${target}px`;
+              });
+            };
+            const observer = new ResizeObserver(adjust);
+            observer.observe(doc.body);
+            stopReaderResize = () => { observer.disconnect(); cancelAnimationFrame(animationFrame); frame.onload = null; };
+            adjust();
+          }
+        } catch (e) {
+          frame.style.height = '80vh';
+        }
+        document.querySelector('.reader-content-card').setAttribute('aria-busy', 'false');
+        $('reader-content-status').textContent = ' ';
+      };
+      frame.srcdoc = message.html || plainDocument(message.text || 'لا يوجد محتوى للرسالة.');
+    }
+  } catch (error) {
+    if (request !== readerRequest) return;
+    $('reader-subject').textContent = 'تعذر تحميل الرسالة';
+    if (frame) frame.srcdoc = plainDocument(friendlyError(error));
+    $('reader-content-status').textContent = 'أعد المحاولة من زر التحديث';
+    document.querySelector('.reader-content-card').setAttribute('aria-busy', 'false');
+  } finally {
+    if (request === readerRequest) $('reader-retry-btn').disabled = false;
+  }
+}
+
+function closeReader(updateHistory = true) {
+  ++readerRequest;
+  stopReaderResize();
+  state.currentMessage = null;
+  $('reader-shell')?.classList.add('hidden');
+  $('feed-shell')?.classList.remove('hidden');
+  const frame = $('reader-frame');
+  if (frame) frame.srcdoc = '';
+  placeHero();
+  if (updateHistory && history.state?.screen === 'reader') {
+    history.back();
+  }
+  readerReturnFocus?.focus?.({ preventScroll: true });
+  window.scrollTo({ top: readerReturnScroll, behavior: 'instant' });
+}
+
+function getNextSequentialPrefix(base = 'ahmedroou') {
+  const allEmails = [...state.official, ...state.temp].map(i => (i.email || '').toLowerCase().trim());
+  const baseEmail = `${base}@batabitoo.com`.toLowerCase();
+  if (!allEmails.includes(baseEmail)) {
+    return base;
+  }
+  let maxNum = 0;
+  const re = new RegExp(`^${base}(\\d+)@batabitoo\\.com$`, 'i');
+  for (const email of allEmails) {
+    const m = email.match(re);
+    if (m) {
+      const num = parseInt(m[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  }
+  return `${base}${maxNum + 1}`;
+}
+
+function openCreateModal() {
+  const next = getNextSequentialPrefix('ahmedroou');
+  if ($('seq-preview')) $('seq-preview').textContent = next;
+  $('create-modal').classList.remove('hidden');
+  setTimeout(() => $('create-name').focus(), 80);
+}
+
+function closeModal(type) {
+  if (type === 'message') {
+    closeReader();
+    return;
+  }
+  $(`${type}-modal`)?.classList.add('hidden');
+}
+
+async function createInbox(event) {
+  event.preventDefault();
+  const name = $('create-name').value.trim();
+  const prefix = $('create-prefix').value.trim();
+  const path = state.createType === 'official' ? '/api/official/create' : '/api/inboxes/create';
+  const button = $('create-submit');
+  setBusy(button, true, 'جاري إنشاء الصندوق…');
+  try {
+    const data = await api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personName: name || undefined, label: name || undefined, prefix: prefix || undefined })
+    });
+    if (!data.inbox) throw new Error('لم يرجع الخادم صندوقًا جديدًا');
+    $('create-modal').classList.add('hidden');
+    $('create-form').reset();
+    state.inboxType = state.createType;
+    document.querySelectorAll('[data-inbox-type]').forEach(item => item.classList.toggle('active', item.dataset.inboxType === state.inboxType));
+    await loadInboxes();
+    await selectInbox(data.inbox.id);
+    toast(`تم إنشاء ${data.inbox.email}`);
+  } catch (error) {
+    toast(friendlyError(error), true);
+  } finally {
+    setBusy(button, false, 'إنشاء الصندوق');
+  }
+}
+
+function askDelete(id) {
+  state.pendingDeleteId = id;
+  $('confirm-delete').classList.remove('hidden');
+}
+
+async function deleteInbox() {
+  if (!state.pendingDeleteId) return;
+  const id = state.pendingDeleteId;
+  setBusy($('accept-delete'), true, 'جارٍ الحذف');
+  try {
+    await api(`/api/inboxes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    $('confirm-delete').classList.add('hidden');
+    state.pendingDeleteId = null;
+    await loadInboxes();
+    await loadCurrent(true);
+    await loadStatus();
+    toast('تم حذف الصندوق ورسائله');
+  } catch (error) {
+    toast(friendlyError(error), true);
+  } finally {
+    setBusy($('accept-delete'), false, 'حذف');
+  }
+}
+
+function showContentSkeleton() {
+  hideEmpty();
+  $('message-list').innerHTML = '<div class="skeleton-list wide"></div>';
+}
+
+function showEmpty(title, message) {
+  $('message-list').innerHTML = '';
+  $('empty-state').classList.remove('hidden');
+  $('empty-state').querySelector('h3').textContent = title;
+  $('empty-state').querySelector('p').textContent = message;
+}
+
+function hideEmpty() { $('empty-state').classList.add('hidden'); }
+
+function setConnection(online, cloud = true) {
+  const pill = $('connection-pill');
+  pill.classList.toggle('online', online);
+  pill.classList.toggle('offline', !online);
+  $('connection-text').textContent = online ? (cloud ? 'متصل ومزامن' : 'متصل محليًا') : 'تعذر الاتصال';
+}
+
+function setBusy(button, busy, label) {
+  if (!button) return;
+  button.disabled = busy;
+  button.classList.toggle('spin', busy);
+  const span = button.querySelector('span');
+  if (span && label) span.textContent = label;
+  else if (!span && label) button.textContent = label;
+}
+
+let toastTimer;
+function toast(message, error = false) {
+  clearTimeout(toastTimer);
+  $('toast-message').textContent = message;
+  $('toast-icon').textContent = error ? '!' : '✓';
+  $('toast').classList.toggle('error', error);
+  $('toast').classList.add('show');
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2800);
+}
+
+async function copyText(value, message) {
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(String(value));
+    toast(message);
+  } catch {
+    toast('تعذر النسخ إلى الحافظة', true);
+  }
+}
+
+function isOfficial(inbox) {
+  return inbox?.isOfficial === true || inbox?.type === 'official' || String(inbox?.email || '').toLowerCase().endsWith('@batabitoo.com');
+}
+
+function isAmazonMessage(msg) {
+  if (!msg) return false;
+  if (msg.isAmazon === true || msg.isBanned === true) return true;
+  const textToCheck = [
+    formatAddress(msg.from),
+    formatAddress(msg.to),
+    msg.subject,
+    msg.intro,
+    msg.text,
+    msg.inboxEmail
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /amazon|أمازون|امازون|إمازون|amazon\.sa|amazon\.com|amazon\.ae|amazon\.co\.uk|amazon\.de|ofm@|cis@/i.test(textToCheck);
+}
+
+function isBannedMessage(msg) {
+  if (!msg) return false;
+  if (msg.isBanned === true) return true;
+  const textToCheck = [
+    formatAddress(msg.from),
+    formatAddress(msg.to),
+    msg.subject,
+    msg.intro,
+    msg.text,
+    msg.inboxEmail
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const hasBannedSender = /ofm@amazon|cis@amazon|buyer-returns@amazon|account-alert@amazon|buyer-investigations@amazon|الموظف المختص بالأمور المتعلقة بالحساب|account specialist/i.test(textToCheck);
+  const hasDigitalRestriction = /المشتريات الرقمية|مشتريات رقمية|digital purchases only|digital orders only|غير الرقمية|سياسة المرتجعات ورد الأموال|انتهاكات متعددة لسياسة المرتجعات/i.test(textToCheck);
+  const hasAccountClosure = /أغلقنا هذا الحساب|اغلقنا هذا الحساب|تم إغلاق حسابك|تم اغلاق حسابك|تم حظر حسابك|تم تعليق حسابك|إنهاء الحسابات|انهاء الحسابات|رفض الخدمة|إنهاء استخدام خدمات أمازون|انهاء استخدام خدمات امازون|closed this account|account has been closed|account closure|terminate your account|terminated your account|refuse service, terminate accounts|account on hold|account suspended|account locked/i.test(textToCheck);
+
+  return hasBannedSender || hasDigitalRestriction || hasAccountClosure;
+}
+
+function getBanReason(msg) {
+  if (!msg) return "حساب محظور / مقيد";
+  const textToCheck = [formatAddress(msg.from), msg.subject, msg.intro, msg.text].filter(Boolean).join(' ').toLowerCase();
+  if (/المشتريات الرقمية|مشتريات رقمية|digital purchases/i.test(textToCheck)) {
+    return "مشتريات رقمية فقط";
+  }
+  if (/أغلقنا هذا الحساب|تم إغلاق|closed this account|إنهاء الحسابات|terminate/i.test(textToCheck)) {
+    return "إغلاق وحظر الحساب";
+  }
+  if (/ofm@|الموظف المختص|account specialist/i.test(textToCheck)) {
+    return "مراجعة أمنية / OFM";
+  }
+  return "حساب مقيد / محظور";
+}
+
+function isAmazonInbox(inbox, messages = null) {
+  if (!inbox) return false;
+  // Strictly Official inboxes only!
+  if (!isOfficial(inbox)) return false;
+  // Fast path O(1): skip if already classified as Amazon or Banned
+  if (inbox.isAmazon === true || inbox.isBanned === true) return true;
+
+  // Check metadata
+  const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
+  if (/amazon|أمازون|امازون|إمازون/i.test(meta)) return true;
+
+  // Check messages
+  const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
+  const inboxEmail = String(inbox.email || '').toLowerCase().trim();
+  return allMsgs.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && isAmazonMessage(m));
+}
+
+function isBannedInbox(inbox, messages = null) {
+  if (!inbox) return false;
+  // Strictly Official inboxes only!
+  if (!isOfficial(inbox)) return false;
+  // Fast path O(1): skip if already classified as Banned
+  if (inbox.isBanned === true) return true;
+
+  // Check metadata
+  const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
+  if (/محظور|مقيد|banned|restricted|suspended/i.test(meta)) return true;
+
+  // Check messages
+  const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
+  const inboxEmail = String(inbox.email || '').toLowerCase().trim();
+  return allMsgs.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && isBannedMessage(m));
+}
+
+function formatAddress(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(formatAddress).filter(Boolean).join(', ');
+  if (typeof value === 'object') {
+    const address = value.address || value.email || '';
+    const name = value.name || '';
+    return name && address && name !== address ? `${name} <${address}>` : address || name;
+  }
+  return String(value);
+}
+
+function initials(value) {
+  const words = String(value || '@').replace(/[<>@._-]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map(word => word[0]).join('') || '@').toUpperCase();
+}
+
+function normalize(value) { return String(value || '').toLowerCase().normalize('NFKD').trim(); }
+function formatNumber(value) { return new Intl.NumberFormat('ar-SA', { maximumFractionDigits: 0 }).format(Number(value) || 0); }
+function formatDate(value, long = false) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat('ar-SA', long
+    ? { dateStyle: 'medium', timeStyle: 'short' }
+    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+function html(value) { return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
+function attr(value) { return html(value); }
+function friendlyError(error) { return error?.name === 'AbortError' ? 'انتهت مهلة الاتصال بالخادم' : (error?.message || 'حدث خطأ غير متوقع'); }
+function plainDocument(text) { return `<!doctype html><html dir="auto"><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;line-height:1.85;padding:24px;color:#172337;white-space:pre-wrap}a{color:#0789ae}</style><body>${html(text)}</body></html>`; }
+function loadingDocument() { return '<!doctype html><style>body{margin:0;background:#f6f9fc}div{width:55%;height:14px;margin:50px auto;border-radius:8px;background:#dce6ef;box-shadow:0 28px #e5edf4,0 56px #e5edf4;animation:p 1s infinite alternate}@keyframes p{to{opacity:.35}}</style><div></div>'; }

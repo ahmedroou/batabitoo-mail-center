@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "ScanAndDraw Auto Register Pro (Batabitoo Dual-Engine)",
+  "version": "3.0",
+  "description": "Automates registration on scananddraw.com with official @batabitoo.com & multi-domain real emails",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://scananddraw.com/*",
+    "*://www.scananddraw.com/*",
+    "http://localhost:3030/*",
+    "https://inbox-api.batabitoo.com/*",
+    "https://batabitoo-mail-2026.web.app/*",
+    "https://batabitoo-mail-2026.firebaseapp.com/*",
+    "https://api.mail.tm/*",
+    "https://api.mail.gw/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://scananddraw.com/*",
+        "*://www.scananddraw.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "ScanAndDraw Auto Pro",
+    "default_popup": "popup.html"
+  }
+}

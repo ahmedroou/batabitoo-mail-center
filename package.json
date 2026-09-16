@@ -1,0 +1,27 @@
+{
+  "name": "batabitoo-mail-center",
+  "version": "1.0.0",
+  "description": "Batabitoo Mail Center & Nivea Live Ingestion Dashboard",
+  "main": "inbox_server.js",
+  "scripts": {
+    "start": "node inbox_server.js"
+  },
+  "keywords": [
+    "batabitoo",
+    "inbox",
+    "nivea",
+    "mail"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "firebase-admin": "^14.4.0",
+    "iconv-lite": "^0.7.3",
+    "mailparser": "^3.9.26",
+    "sanitize-html": "^2.17.7",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
