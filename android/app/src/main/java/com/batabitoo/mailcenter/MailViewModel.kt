@@ -355,6 +355,20 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun triggerAiVerify(inbox: Inbox) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null, notice = "جاري الفحص بالذكاء الاصطناعي... 🤖") }
+            runCatching {
+                repository.triggerAiVerify(inbox.id)
+            }.onSuccess {
+                _uiState.update { it.copy(notice = "تم الفحص بالذكاء الاصطناعي 🤖") }
+                refreshAll()
+            }.onFailure { err ->
+                _uiState.update { it.copy(refreshing = false, error = "فشل الفحص: ${err.message}") }
+            }
+        }
+    }
+
     fun openMessage(message: MailMessage) {
         val request = ++messageRequest
         _uiState.update { it.copy(selectedMessage = message, messageLoading = true, messageError = null) }

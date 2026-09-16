@@ -616,6 +616,30 @@ svg {
   transform: translateY(-1px);
 }
 
+.btn-ai-verify {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #7c3aed;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+  line-height: 1.3;
+  border: none;
+}
+
+.btn-ai-verify:hover {
+  background: #6d28d9;
+  transform: translateY(-1px);
+}
+
+.btn-ai-verify:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
 /* Search Box */
 .search-box {
   height: 40px;
@@ -1350,25 +1374,50 @@ svg {
 }
 
 /* =============================================================
-   Dedicated Amazon Hub Shell (Full Suite for Amazon Accounts & OTPs)
+   Dedicated Amazon Hub Shell — Modern Redesign
    ============================================================= */
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes countPulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes borderGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(234,88,12,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(234,88,12,0); }
+}
+
 .amazon-hub-shell {
   display: flex;
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  animation: fadeIn 0.2s ease-out;
+  animation: slideUp 0.25s ease-out;
 }
 
+/* ---- Hero Banner ---- */
 .amazon-hub-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 20px;
-  padding: 24px 28px;
+  padding: 26px 28px;
   border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 60%, #1e1b4b 100%);
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #1e293b 70%, #0c0a1e 100%);
+  background-size: 200% 200%;
+  animation: gradientShift 8s ease infinite;
   color: #ffffff;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(255,255,255,0.06);
   position: relative;
   overflow: hidden;
 }
@@ -1376,12 +1425,25 @@ svg {
 .amazon-hub-hero::before {
   content: "";
   position: absolute;
-  top: -40%;
-  right: -20%;
-  width: 380px;
-  height: 380px;
+  top: -50%;
+  right: -15%;
+  width: 420px;
+  height: 420px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(234, 88, 12, 0.25), transparent 70%);
+  background: radial-gradient(circle, rgba(234, 88, 12, 0.22), transparent 68%);
+  pointer-events: none;
+  animation: gradientShift 6s ease infinite;
+}
+
+.amazon-hub-hero::after {
+  content: "";
+  position: absolute;
+  bottom: -30%;
+  left: 5%;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99,102,241,0.15), transparent 65%);
   pointer-events: none;
 }
 
@@ -1389,19 +1451,24 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 4px 14px;
   border-radius: 999px;
-  background: rgba(234, 88, 12, 0.2);
-  border: 1px solid rgba(234, 88, 12, 0.4);
+  background: rgba(234, 88, 12, 0.18);
+  border: 1px solid rgba(234, 88, 12, 0.45);
   color: #fb923c;
   font-size: 11px;
   font-weight: 800;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  animation: borderGlow 3s ease-in-out infinite;
+}
+
+.amazon-cart-icon {
+  font-size: 14px;
 }
 
 .amazon-hero-main h2 {
   font-size: 22px;
-  font-weight: 800;
+  font-weight: 900;
   color: #ffffff;
   margin: 0 0 8px;
   line-height: 1.3;
@@ -1410,8 +1477,8 @@ svg {
 .amazon-hero-main p {
   color: #94a3b8;
   font-size: 12px;
-  line-height: 1.6;
-  margin: 0 0 18px;
+  line-height: 1.7;
+  margin: 0 0 20px;
   max-width: 520px;
 }
 
@@ -1422,20 +1489,30 @@ svg {
   gap: 10px;
 }
 
+/* Animated create button */
 .amazon-create-btn {
-  background: linear-gradient(135deg, #f97316, #ea580c) !important;
+  background: linear-gradient(135deg, #f97316, #ea580c, #dc2626) !important;
+  background-size: 200% 100% !important;
   color: #ffffff !important;
-  box-shadow: 0 6px 18px rgba(234, 88, 12, 0.35) !important;
+  box-shadow: 0 6px 20px rgba(234, 88, 12, 0.4) !important;
   font-weight: 800;
-  height: 40px;
-  padding: 0 18px;
+  height: 42px;
+  padding: 0 20px;
+  border-radius: var(--radius-full) !important;
+  transition: all 0.2s ease !important;
+  animation: gradientShift 4s ease infinite !important;
 }
 
 .amazon-create-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 24px rgba(234, 88, 12, 0.45) !important;
+  transform: translateY(-2px) scale(1.02) !important;
+  box-shadow: 0 10px 28px rgba(234, 88, 12, 0.5) !important;
 }
 
+.amazon-create-btn:active {
+  transform: translateY(0) scale(0.98) !important;
+}
+
+/* Stat tiles grid */
 .amazon-hero-stats {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1451,33 +1528,50 @@ svg {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
+  transition: background 0.2s ease, transform 0.2s ease;
+  cursor: default;
+}
+
+.amazon-stat-tile:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
 }
 
 .amazon-stat-tile span {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .amazon-stat-tile strong {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 900;
   color: #ffffff;
+  animation: countPulse 0.4s ease-out;
 }
 
-.amazon-stat-tile.highlight-gold strong {
-  color: #fbbf24;
+.amazon-stat-tile.highlight-gold {
+  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.08);
 }
+.amazon-stat-tile.highlight-gold strong { color: #fbbf24; }
 
-.amazon-stat-tile.highlight-amber strong {
-  color: #f59e0b;
+.amazon-stat-tile.highlight-amber {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
 }
+.amazon-stat-tile.highlight-amber strong { color: #f59e0b; }
 
-.amazon-stat-tile.highlight-red strong {
-  color: #f87171;
+.amazon-stat-tile.highlight-red {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.08);
 }
+.amazon-stat-tile.highlight-red strong { color: #f87171; }
 
+/* ---- Feed Container ---- */
 .amazon-feed-container {
   display: flex;
   flex-direction: column;
@@ -1485,7 +1579,7 @@ svg {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 16px;
+  padding: 18px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -1497,13 +1591,16 @@ svg {
   flex-wrap: wrap;
 }
 
+/* ---- Colored Sub-Filter Tabs ---- */
 .amazon-sub-tabs {
   display: flex;
   align-items: center;
   gap: 6px;
   overflow-x: auto;
-  padding-bottom: 2px;
+  padding-bottom: 4px;
+  scrollbar-width: none;
 }
+.amazon-sub-tabs::-webkit-scrollbar { display: none; }
 
 .amazon-sub-tabs button {
   height: 36px;
@@ -1518,19 +1615,78 @@ svg {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
-  transition: all 0.15s ease;
+  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  cursor: pointer;
 }
 
 .amazon-sub-tabs button:hover {
-  background: var(--line-light);
-  color: var(--ink);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 
-.amazon-sub-tabs button.active {
-  background: #ea580c;
-  border-color: #ea580c;
+/* All — Orange */
+.amazon-sub-tabs button[data-amazon-filter="all"].active {
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  border-color: transparent;
   color: #ffffff;
-  box-shadow: 0 4px 12px rgba(234, 88, 12, 0.25);
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);
+}
+.amazon-sub-tabs button[data-amazon-filter="all"]:not(.active):hover {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #c2410c;
+}
+
+/* OTP — Emerald */
+.amazon-sub-tabs button[data-amazon-filter="otp"].active {
+  background: linear-gradient(135deg, #10b981, #059669);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);
+}
+.amazon-sub-tabs button[data-amazon-filter="otp"]:not(.active):hover {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #059669;
+}
+
+/* Suspected — Amber */
+.amazon-sub-tabs button[data-amazon-filter="suspected"].active {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.35);
+}
+.amazon-sub-tabs button[data-amazon-filter="suspected"]:not(.active):hover {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #d97706;
+}
+
+/* Banned — Red */
+.amazon-sub-tabs button[data-amazon-filter="banned"].active {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+}
+.amazon-sub-tabs button[data-amazon-filter="banned"]:not(.active):hover {
+  background: #fff1f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+/* Orders — Blue */
+.amazon-sub-tabs button[data-amazon-filter="orders"].active {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+.amazon-sub-tabs button[data-amazon-filter="orders"]:not(.active):hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
 }
 
 .amazon-sub-tabs button b {
@@ -1540,31 +1696,34 @@ svg {
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.1);
   font-size: 10px;
 }
 
 .amazon-sub-tabs button.active b {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.28);
   color: #ffffff;
 }
 
+/* ---- Inbox Reel Chips ---- */
 .amazon-inboxes-reel {
   display: flex;
   align-items: center;
   gap: 8px;
   overflow-x: auto;
-  padding: 6px 2px 8px;
+  padding: 6px 2px 10px;
   border-bottom: 1px solid var(--line-light);
+  scrollbar-width: none;
 }
+.amazon-inboxes-reel::-webkit-scrollbar { display: none; }
 
 .amazon-reel-item {
-  height: 36px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--canvas);
   border: 1px solid var(--line);
   color: var(--ink-muted);
@@ -1572,20 +1731,24 @@ svg {
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+  flex-shrink: 0;
 }
 
 .amazon-reel-item:hover {
   background: #fff7ed;
   border-color: #fed7aa;
   color: #c2410c;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(234, 88, 12, 0.12);
 }
 
 .amazon-reel-item.active {
-  background: #ffedd5;
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
   border-color: #ea580c;
   color: #9a3412;
   font-weight: 800;
+  box-shadow: 0 4px 12px rgba(234, 88, 12, 0.2);
 }
 
 .amazon-reel-item.is-suspected {
@@ -1603,17 +1766,17 @@ svg {
 .amazon-reel-item .reel-count {
   padding: 1px 6px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.07);
   font-size: 10px;
 }
 
 .amazon-reel-add {
-  height: 36px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: #f0fdf4;
   border: 1px dashed #86efac;
   color: #166534;
@@ -1621,12 +1784,22 @@ svg {
   font-weight: 800;
   white-space: nowrap;
   cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
 .amazon-reel-add:hover {
   background: #dcfce7;
   border-color: #4ade80;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(34, 197, 94, 0.15);
 }
+
+
+
+
+
+
 
 /* =============================================================
    Dedicated Standalone Message Reader (Clean, Full View)

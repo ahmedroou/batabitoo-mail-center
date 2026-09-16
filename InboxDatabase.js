@@ -4,6 +4,7 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 
 const content = require('./MailContent');
+const { defaultGemini } = require('./GeminiAI');
 
 const DB_FILE = process.env.MAIL_DB_FILE || path.join(__dirname, 'inboxes_db.json');
 const NIVEA_FILE = path.join(__dirname, 'results_nivea_live.json');
@@ -251,6 +252,13 @@ class InboxDatabase {
           inbox.banReason = this.getBanReason(matchingMsg);
           inbox.bannedDetectedAt = inbox.bannedDetectedAt || new Date().toISOString();
           changed = true;
+
+          // Asynchronously trigger AI evaluation
+          setTimeout(() => {
+            this.aiVerifyInbox(inbox.id).catch(err => {
+              console.warn(`[Auto-AI Verify] Check failed for ${inbox.email}:`, err.message);
+            });
+          }, 100);
         }
       }
 
@@ -346,6 +354,56 @@ class InboxDatabase {
     }
 
     return inbox;
+  }
+
+  /**
+   * Run Gemini AI verification on an inbox to accurately check if it is really banned or safe.
+   * If AI confirms banned -> updates to 'confirmed'.
+   * If AI confirms safe -> updates to 'safe'.
+   * If AI is uncertain or fails -> remains 'suspected' for user manual confirmation.
+   * @param {string} inboxId - inbox id or email
+   * @returns {Promise<{ success: boolean, aiResult?: Object, error?: string, inbox: Object }>}
+   */
+  async aiVerifyInbox(inboxId) {
+    const data = this.readLocal();
+    const inbox = (data.inboxes || []).find(i => i.id === inboxId || (i.email && i.email.toLowerCase() === inboxId.toLowerCase()));
+    if (!inbox) return null;
+
+    const messages = data.messages || [];
+    const matchingMsgs = messages.filter(m => (String(m.inboxEmail || '').toLowerCase().trim() === String(inbox.email || '').toLowerCase().trim()));
+    const targetMsg = matchingMsgs.find(m => this.isBannedMessage(m)) || matchingMsgs.find(m => this.isAmazonMessage(m)) || matchingMsgs[0];
+
+    if (!targetMsg) {
+      return { success: false, reason: "لا توجد رسائل كافية للفحص بواسطة الذكاء الاصطناعي", inbox };
+    }
+
+    try {
+      const fromStr = typeof targetMsg.from === 'object' ? (targetMsg.from?.address || targetMsg.from?.email || JSON.stringify(targetMsg.from)) : String(targetMsg.from || '');
+      const aiResult = await defaultGemini.classifyAmazonEmail({
+        subject: targetMsg.subject || '',
+        text: targetMsg.text || '',
+        intro: targetMsg.intro || '',
+        from: fromStr
+      });
+
+      console.log(`🤖 [Gemini AI] Evaluated ${inbox.email}: ${aiResult.classification} (${aiResult.confidence}) - ${aiResult.reason} [${aiResult.model} in ${aiResult.latencyMs}ms]`);
+
+      if (aiResult.classification === 'banned' && (aiResult.confidence === 'high' || aiResult.confidence === 'medium')) {
+        await this.setInboxBanStatus(inbox.id, 'confirmed', `[AI] ${aiResult.reason}`);
+      } else if (aiResult.classification === 'safe') {
+        await this.setInboxBanStatus(inbox.id, 'safe', `[AI] ${aiResult.reason}`);
+      } else {
+        // Uncertain: keep as suspected for user decision
+        await this.setInboxBanStatus(inbox.id, 'suspected', `[AI غير متأكد] ${aiResult.reason}`);
+      }
+
+      const updatedData = this.readLocal();
+      const updatedInbox = (updatedData.inboxes || []).find(i => i.id === inbox.id);
+      return { success: true, aiResult, inbox: updatedInbox };
+    } catch (err) {
+      console.error(`⚠️ [Gemini AI Error] evaluating ${inbox.email}:`, err.message);
+      return { success: false, error: err.message, inbox };
+    }
   }
 
   getAmazonMessages() {
@@ -464,6 +522,13 @@ class InboxDatabase {
             inbox.isAmazon = true;
             inbox.banReason = this.getBanReason(matchingBanMsg);
             inbox.bannedDetectedAt = inbox.bannedDetectedAt || new Date().toISOString();
+
+            // Asynchronously trigger AI evaluation
+            setTimeout(() => {
+              this.aiVerifyInbox(inbox.id).catch(err => {
+                console.warn(`[Auto-AI Verify] Check failed for ${inbox.email}:`, err.message);
+              });
+            }, 100);
           }
         }
         if (!inbox.isAmazon && (this.isAmazonInbox(inbox, data.messages) || changedMessages.some(m => this.isAmazonMessage(m)))) {
@@ -801,12 +866,12 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 3,
-      latestVersionName: "1.2.0",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.2.0/Batabitoo-Mail-Center-1.2.0.apk",
-      releaseNotes: "إصلاح شامل لعرض وقراءة البريد ليماثل Gmail، صفحة أمازون المستقلة بتصميم حركي، تنقية أسماء المرسلين، ومزامنة نسخة الويب.",
+      latestVersionCode: 4,
+      latestVersionName: "1.3.0",
+      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.0.apk",
+      releaseNotes: "إضافة نظام فحص الحظر التلقائي بالذكاء الاصطناعي Gemini AI للتحقق من الحسابات المشبوهة.",
       mandatory: false,
-      updatedAt: "2026-09-16T08:40:00.000Z"
+      updatedAt: new Date().toISOString()
     };
     return data.appVersion || defaultVersion;
   }

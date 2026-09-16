@@ -151,6 +151,12 @@ function bindEvents() {
       updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
       return;
     }
+    const aiBtn = event.target.closest('[data-ai-verify]');
+    if (aiBtn) {
+      event.stopPropagation();
+      triggerAiVerify(aiBtn);
+      return;
+    }
     if (event.target.closest('[data-load-more]')) {
       inboxLimit += 40;
       renderInboxes();
@@ -214,6 +220,12 @@ function bindEvents() {
     if (safeBtn) {
       event.stopPropagation();
       updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
+      return;
+    }
+    const aiBtn = event.target.closest('[data-ai-verify]');
+    if (aiBtn) {
+      event.stopPropagation();
+      triggerAiVerify(aiBtn);
       return;
     }
     const otp = event.target.closest('[data-copy-otp]');
@@ -378,6 +390,33 @@ async function updateBanStatus(id, banStatus, reason = '') {
   }
 }
 
+async function triggerAiVerify(btn) {
+  const inboxId = btn.dataset.aiVerify;
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'جاري الفحص... 🤖';
+  try {
+    const res = await api('/api/inbox/ai-verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: inboxId })
+    });
+    const verdict = res.aiResult;
+    if (verdict) {
+      const icon = verdict.classification === 'banned' ? '⛔' : verdict.classification === 'safe' ? '✅' : '⚠️';
+      const conf = verdict.confidence ? ` (${verdict.confidence})` : '';
+      toast(`AI ${icon}${conf}: ${verdict.reason || 'تم الفحص'}`, verdict.classification === 'safe' ? false : false);
+    } else {
+      toast('تم الفحص بالذكاء الاصطناعي 🤖');
+    }
+    await refreshEverything();
+  } catch (err) {
+    toast(friendlyError(err), true);
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
 function findInboxByEmail(email) {
   if (!email) return null;
   const clean = String(email).trim().toLowerCase();
@@ -515,6 +554,7 @@ function renderInboxes() {
           <div class="ban-confirm-btns">
             <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
             <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
+            <button class="btn-ai-verify" type="button" data-ai-verify="${attr(inbox.id)}" title="تحقق بالذكاء الاصطناعي">فحص AI 🤖</button>
           </div>
         </div>` : ''}
       </div>
@@ -759,6 +799,7 @@ function renderAmazonMessages() {
           <div class="ban-confirm-btns">
             <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
             <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
+            <button class="btn-ai-verify" type="button" data-ai-verify="${attr(inbox.id)}" title="تحقق بالذكاء الاصطناعي">فحص AI 🤖</button>
           </div>
         </div>` : ''}
       </div>

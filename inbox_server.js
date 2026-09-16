@@ -310,6 +310,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ============================================================
+    // POST /api/inbox/ai-verify — AI auto-verify suspected ban
+    // ============================================================
+    if (url.pathname === '/api/inbox/ai-verify' && req.method === 'POST') {
+      const payload = await parseBody();
+      if (!payload?.id) return sendJSON(400, { error: 'Missing inbox id' });
+      const result = await db.aiVerifyInbox(payload.id);
+      if (!result) return sendJSON(404, { error: 'Inbox not found' });
+      return sendJSON(200, result);
+    }
+
+    // ============================================================
+    // GET /api/ai/status — Check Gemini AI availability
+    // ============================================================
+    if (url.pathname === '/api/ai/status' && req.method === 'GET') {
+      try {
+        const { defaultGemini } = require('./GeminiAI');
+        const testResult = await defaultGemini.classifyAmazonEmail({
+          subject: 'test ping',
+          text: 'test ping',
+          from: 'test@test.com'
+        });
+        return sendJSON(200, { ready: true, model: testResult.model, latencyMs: testResult.latencyMs });
+      } catch (e) {
+        return sendJSON(200, { ready: false, error: e.message });
+      }
+    }
+
+    // ============================================================
     // 4. GET /api/inbox/current — Active inbox + messages
     // ============================================================
     if (url.pathname === '/api/inbox/current' && req.method === 'GET') {

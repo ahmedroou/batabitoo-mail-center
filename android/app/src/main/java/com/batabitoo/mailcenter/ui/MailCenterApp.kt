@@ -374,6 +374,7 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
                     onDelete = { deleteTarget = inbox },
                     onConfirmBan = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "confirmed") } } else null,
                     onMarkSafe = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "safe") } } else null,
+                    onAiVerify = if (inbox.isSuspected) { { viewModel.triggerAiVerify(inbox) } } else null,
                 )
             }
         }
@@ -540,6 +541,7 @@ private fun BanConfirmationBox(
     reason: String,
     onConfirmBan: () -> Unit,
     onMarkSafe: () -> Unit,
+    onAiVerify: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -615,6 +617,22 @@ private fun BanConfirmationBox(
                         fontWeight = FontWeight.Bold,
                     )
                 }
+                if (onAiVerify != null) {
+                    Button(
+                        onClick = onAiVerify,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.weight(1f).height(30.dp),
+                    ) {
+                        Text(
+                            "فحص AI 🤖",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
+                    }
+                }
             }
         }
     }
@@ -629,6 +647,7 @@ private fun InboxRow(
     onDelete: () -> Unit,
     onConfirmBan: (() -> Unit)? = null,
     onMarkSafe: (() -> Unit)? = null,
+    onAiVerify: (() -> Unit)? = null,
 ) {
     val accent = when {
         inbox.isConfirmedBanned -> BannedRed
@@ -814,6 +833,7 @@ private fun InboxRow(
                     reason = inbox.banReason,
                     onConfirmBan = onConfirmBan,
                     onMarkSafe = onMarkSafe,
+                    onAiVerify = onAiVerify,
                 )
             }
         }
@@ -960,6 +980,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                         },
                         onConfirmBan = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "confirmed") } } else null,
                         onMarkSafe = if (inbox.isSuspected) { { viewModel.updateBanStatus(inbox, "safe") } } else null,
+                        onAiVerify = if (inbox.isSuspected) { { viewModel.triggerAiVerify(inbox) } } else null,
                     )
                 }
             }
@@ -1247,6 +1268,7 @@ private fun AmazonAccountCard(
     onViewMessages: () -> Unit,
     onConfirmBan: (() -> Unit)? = null,
     onMarkSafe: (() -> Unit)? = null,
+    onAiVerify: (() -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1408,6 +1430,7 @@ private fun AmazonAccountCard(
                     reason = inbox.banReason,
                     onConfirmBan = onConfirmBan,
                     onMarkSafe = onMarkSafe,
+                    onAiVerify = onAiVerify,
                 )
             }
 

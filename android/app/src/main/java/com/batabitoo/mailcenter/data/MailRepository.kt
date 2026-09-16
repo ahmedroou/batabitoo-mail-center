@@ -129,6 +129,11 @@ class MailRepository(context: Context) {
         request("/api/inbox/ban-status", "POST", body.toString())
     }
 
+    suspend fun triggerAiVerify(id: String): String = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply { put("id", id) }
+        request("/api/inbox/ai-verify", "POST", body.toString())
+    }
+
     private fun fetchCached(key: String, path: String): String {
         return try {
             val value = request(path)
