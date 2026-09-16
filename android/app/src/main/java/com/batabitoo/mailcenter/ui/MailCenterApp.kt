@@ -1,5 +1,6 @@
 package com.batabitoo.mailcenter.ui
 
+import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebView
@@ -2174,9 +2175,13 @@ private fun InAppUpdateDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    var downloading by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var progress by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(0f) }
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
     AlertDialog(
         onDismissRequest = {
-            if (!update.mandatory) onDismiss()
+            if (!update.mandatory && !downloading) onDismiss()
         },
         icon = {
             Box(
@@ -2248,38 +2253,93 @@ private fun InAppUpdateDialog(
                     }
                     Spacer(Modifier.height(10.dp))
                 }
-                Text(
-                    "انقر على الزر أدناه لتنزيل التحديث وتثبيته مباشرة.",
-                    color = Muted,
-                    fontSize = 11.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (downloading) {
+                    Text(
+                        "جاري تنزيل التحديث... ${ (progress * 100).toInt() }%",
+                        color = Primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                        color = Primary,
+                        trackColor = SurfaceSoft,
+                    )
+                } else {
+                    Text(
+                        "انقر على الزر أدناه لتنزيل التحديث وتثبيته مباشرة.",
+                        color = Muted,
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
+                    if (downloading) return@Button
                     if (update.downloadUrl.isNotBlank()) {
-                        val uri = Uri.parse(update.downloadUrl)
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        }.onFailure {
-                            android.widget.Toast.makeText(context, "تعذر فتح الرابط: ${it.message}", android.widget.Toast.LENGTH_SHORT).show()
+                        downloading = true
+                        progress = 0f
+                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                val url = java.net.URL(update.downloadUrl)
+                                val connection = url.openConnection() as java.net.HttpURLConnection
+                                connection.connect()
+                                val fileLength = connection.contentLength
+                                val input = java.io.BufferedInputStream(url.openStream())
+                                val file = java.io.File(context.externalCacheDir ?: context.cacheDir, "update_v${update.latestVersionCode}.apk")
+                                val output = java.io.FileOutputStream(file)
+                                val data = ByteArray(1024)
+                                var total: Long = 0
+                                var count: Int
+                                while (input.read(data).also { count = it } != -1) {
+                                    total += count.toLong()
+                                    if (fileLength > 0) {
+                                        progress = (total * 100 / fileLength).toFloat() / 100f
+                                    }
+                                    output.write(data, 0, count)
+                                }
+                                output.flush()
+                                output.close()
+                                input.close()
+
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "application/vnd.android.package-archive")
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                }
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    context.startActivity(intent)
+                                    downloading = false
+                                    if (!update.mandatory) onDismiss()
+                                }
+                            } catch (e: Exception) {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    android.widget.Toast.makeText(context, "فشل التحميل: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                    downloading = false
+                                }
+                            }
                         }
                     }
-                    if (!update.mandatory) onDismiss()
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                colors = ButtonDefaults.buttonColors(containerColor = if (downloading) Muted else Color(0xFFEA580C)),
+                enabled = !downloading
             ) {
                 Icon(Icons.Rounded.Download, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("تنزيل وتثبيت الآن (v${update.latestVersionName})")
+                Text(if (downloading) "جاري التحميل..." else "تنزيل وتثبيت الآن (v${update.latestVersionName})")
             }
         },
-        dismissButton = if (!update.mandatory) {
+        dismissButton = if (!update.mandatory && !downloading) {
             {
                 TextButton(
                     onClick = onDismiss,

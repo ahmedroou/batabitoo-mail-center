@@ -866,10 +866,10 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 4,
-      latestVersionName: "1.3.0",
-      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.0.apk",
-      releaseNotes: "إضافة نظام فحص الحظر التلقائي بالذكاء الاصطناعي Gemini AI للتحقق من الحسابات المشبوهة.",
+      latestVersionCode: 5,
+      latestVersionName: "1.3.1",
+      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.1.apk",
+      releaseNotes: "تفعيل التحديث المباشر من داخل التطبيق (In-App Download) لحل مشكلة متصفح جوجل وتحميل التحديثات بسلاسة.",
       mandatory: false,
       updatedAt: new Date().toISOString()
     };
