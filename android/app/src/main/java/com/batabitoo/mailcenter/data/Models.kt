@@ -284,6 +284,30 @@ object MailJson {
         )
     }
 
+    fun firestoreAppVersion(raw: String, currentVersionCode: Int = 1): AppVersionInfo {
+        val root = JSONObject(raw)
+        val fields = root.optJSONObject("fields") ?: JSONObject()
+        val codeObj = fields.optJSONObject("latestVersionCode")
+        val latestCode = codeObj?.optString("integerValue")?.toIntOrNull()
+            ?: codeObj?.optInt("integerValue", 1)
+            ?: 1
+        val latestName = fields.optJSONObject("latestVersionName")?.optString("stringValue", "1.0.0") ?: "1.0.0"
+        val downloadUrl = fields.optJSONObject("downloadUrl")?.optString("stringValue", "") ?: ""
+        val notes = fields.optJSONObject("releaseNotes")?.optString("stringValue", "") ?: ""
+        val mandatory = fields.optJSONObject("mandatory")?.optBoolean("booleanValue", false) ?: false
+        val updatedAt = fields.optJSONObject("updatedAt")?.optString("stringValue", "") ?: ""
+        val hasUpdate = latestCode > currentVersionCode
+        return AppVersionInfo(
+            latestVersionCode = latestCode,
+            latestVersionName = latestName,
+            downloadUrl = downloadUrl,
+            releaseNotes = notes,
+            mandatory = mandatory,
+            updatedAt = updatedAt,
+            hasUpdate = hasUpdate,
+        )
+    }
+
     fun inboxes(raw: String): InboxesPayload {
         val root = JSONObject(raw)
         return InboxesPayload(

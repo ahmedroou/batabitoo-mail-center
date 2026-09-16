@@ -299,4 +299,33 @@ class MailJsonTest {
         assertTrue(status.appVersion!!.hasUpdate)
         assertEquals("1.1.0", status.appVersion!!.latestVersionName)
     }
+
+    @Test
+    fun firestoreAppVersionParsing_parsesGoogleRestApiFormat() {
+        val firestoreRaw = """
+            {
+              "name": "projects/batabitoo-mail-2026/databases/(default)/documents/app_config/version",
+              "fields": {
+                "latestVersionName": { "stringValue": "1.2.0" },
+                "downloadUrl": { "stringValue": "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.2.0/Batabitoo-Mail-Center-1.2.0.apk" },
+                "latestVersionCode": { "integerValue": "3" },
+                "releaseNotes": { "stringValue": "إصلاح شامل لعرض وقراءة البريد ليماثل Gmail" },
+                "mandatory": { "booleanValue": false },
+                "updatedAt": { "stringValue": "2026-09-16T05:51:47.829Z" }
+              }
+            }
+        """.trimIndent()
+
+        // Test with current version 1 -> hasUpdate = true
+        val info1 = MailJson.firestoreAppVersion(firestoreRaw, currentVersionCode = 1)
+        assertEquals(3, info1.latestVersionCode)
+        assertEquals("1.2.0", info1.latestVersionName)
+        assertTrue(info1.hasUpdate)
+        assertFalse(info1.mandatory)
+        assertEquals("https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.2.0/Batabitoo-Mail-Center-1.2.0.apk", info1.downloadUrl)
+
+        // Test with current version 3 -> hasUpdate = false
+        val info3 = MailJson.firestoreAppVersion(firestoreRaw, currentVersionCode = 3)
+        assertFalse(info3.hasUpdate)
+    }
 }
