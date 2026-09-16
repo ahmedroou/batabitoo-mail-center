@@ -506,7 +506,7 @@ function renderInboxes() {
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           <strong>${html(label)}</strong>
           ${unread ? '<span class="unread-pill" title="رسائل جديدة غير مقروءة">جديد</span>' : ''}
-          ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : suspected ? `<span class="suspected-badge" title="${attr(reason)}">⚠️ اشتباه حظر</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
+          ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : suspected ? `<span class="suspected-badge" title="${attr(reason)}">⚠️ اشتباه حظر</span>` : ''}
         </div>
         <span>${html(inbox.email || '')}</span>
         ${suspected ? `
@@ -555,6 +555,14 @@ async function selectInbox(id) {
   state.activeId = id;
   markInboxAsRead(id);
   renderInboxes();
+  // Optimistic: show content view immediately with loading skeleton
+  switchContentView('current');
+  if (innerWidth <= 720) {
+    document.querySelector('.workspace').classList.add('show-content');
+    document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'messages'));
+  }
+  showContentSkeleton();
+  placeHero();
   try {
     await api('/api/inboxes/select', {
       method: 'POST',
@@ -564,12 +572,6 @@ async function selectInbox(id) {
     await loadCurrent(true);
     markInboxAsRead(id, state.messages.length);
     renderInboxes();
-    switchContentView('current');
-    if (innerWidth <= 720) {
-      document.querySelector('.workspace').classList.add('show-content');
-      document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'messages'));
-    }
-    placeHero();
   } catch (error) {
     toast(friendlyError(error), true);
   }
