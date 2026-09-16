@@ -740,13 +740,16 @@ class InboxDatabase {
   async syncVersionFromFirestore() {
     if (!this.isCloudConnected || !this.db) return;
     try {
-      const snap = await this.db.collection('app_config').doc('version').get();
+      let snap = await this.db.collection('app_config').doc('version').get();
+      if (!snap.exists) {
+        snap = await this.db.collection('system').doc('app_version').get();
+      }
       if (snap.exists) {
         const cloudVersion = snap.data();
         const data = this.readLocal();
         data.appVersion = { ...data.appVersion, ...cloudVersion };
         this.writeLocal(data);
-        console.log(`☁️ Synced App Version from Firestore: v${cloudVersion.latestVersionName || '1.1.0'} (code: ${cloudVersion.latestVersionCode})`);
+        console.log(`☁️ Synced App Version from Firestore: v${cloudVersion.latestVersionName || '1.2.0'} (code: ${cloudVersion.latestVersionCode})`);
       }
     } catch (e) {
       console.warn('Could not sync app version from Firestore:', e.message);
@@ -756,12 +759,12 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 2,
-      latestVersionName: "1.1.0",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.1.0/Batabitoo-Mail-Center-1.1.0.apk",
-      releaseNotes: "تحسينات التصميم، كشف حسابات أمازون المحظورة، إنشاء بريد تتابعي، وإدارة التخزين والمساحة.",
+      latestVersionCode: 3,
+      latestVersionName: "1.2.0",
+      downloadUrl: "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.2.0/Batabitoo-Mail-Center-1.2.0.apk",
+      releaseNotes: "إصلاح شامل لعرض وقراءة البريد ليماثل Gmail، صفحة أمازون المستقلة بتصميم حركي، تنقية أسماء المرسلين، ومزامنة نسخة الويب.",
       mandatory: false,
-      updatedAt: "2026-09-16T04:30:00.000Z"
+      updatedAt: "2026-09-16T08:40:00.000Z"
     };
     return data.appVersion || defaultVersion;
   }
@@ -770,7 +773,7 @@ class InboxDatabase {
     const current = this.getAppVersion();
     const updated = {
       latestVersionCode: Number(versionData.latestVersionCode !== undefined ? versionData.latestVersionCode : current.latestVersionCode),
-      latestVersionName: String(versionData.latestVersionName || current.latestVersionName || "1.1.0"),
+      latestVersionName: String(versionData.latestVersionName || current.latestVersionName || "1.2.0"),
       downloadUrl: String(versionData.downloadUrl || current.downloadUrl || ""),
       releaseNotes: String(versionData.releaseNotes !== undefined ? versionData.releaseNotes : current.releaseNotes),
       mandatory: Boolean(versionData.mandatory !== undefined ? versionData.mandatory : current.mandatory),
@@ -781,10 +784,14 @@ class InboxDatabase {
     data.appVersion = updated;
     this.writeLocal(data);
 
-    // Sync to Cloud Firestore
+    // Sync to Cloud Firestore (dual sync to both app_config/version and system/app_version)
     if (this.isCloudConnected && this.db) {
       try {
-        await this.db.collection('app_config').doc('version').set(sanitizeForFirestore(updated), { merge: true });
+        const sanitized = sanitizeForFirestore(updated);
+        await Promise.all([
+          this.db.collection('app_config').doc('version').set(sanitized, { merge: true }),
+          this.db.collection('system').doc('app_version').set(sanitized, { merge: true })
+        ]);
         console.log(`☁️ Saved App Version v${updated.latestVersionName} (code: ${updated.latestVersionCode}) to Firestore!`);
       } catch (e) {
         console.error('⚠️ Firestore updateAppVersion error:', e.message);
