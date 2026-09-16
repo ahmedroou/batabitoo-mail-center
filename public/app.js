@@ -139,16 +139,22 @@ function bindEvents() {
     switchContentView(button.dataset.view);
   });
   $('inbox-list').addEventListener('click', event => {
+    const openMsgBtn = event.target.closest('[data-open-message]');
+    if (openMsgBtn) {
+      event.stopPropagation();
+      openMessage(decodeURIComponent(openMsgBtn.dataset.openMessage));
+      return;
+    }
     const confirmBtn = event.target.closest('[data-confirm-ban]');
     if (confirmBtn) {
       event.stopPropagation();
-      updateBanStatus(confirmBtn.dataset.confirmBan, 'confirmed', 'تم التأكيد يدوياً');
+      submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
       return;
     }
     const safeBtn = event.target.closest('[data-mark-safe]');
     if (safeBtn) {
       event.stopPropagation();
-      updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
       return;
     }
     const aiBtn = event.target.closest('[data-ai-verify]');
@@ -210,16 +216,22 @@ function bindEvents() {
     renderAmazonMessages();
   });
   $('amazon-message-list')?.addEventListener('click', event => {
+    const openMsgBtn = event.target.closest('[data-open-message]');
+    if (openMsgBtn) {
+      event.stopPropagation();
+      openMessage(decodeURIComponent(openMsgBtn.dataset.openMessage));
+      return;
+    }
     const confirmBtn = event.target.closest('[data-confirm-ban]');
     if (confirmBtn) {
       event.stopPropagation();
-      updateBanStatus(confirmBtn.dataset.confirmBan, 'confirmed', 'تم التأكيد يدوياً');
+      submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
       return;
     }
     const safeBtn = event.target.closest('[data-mark-safe]');
     if (safeBtn) {
       event.stopPropagation();
-      updateBanStatus(safeBtn.dataset.markSafe, 'safe', 'تم التحقق يدوياً');
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
       return;
     }
     const aiBtn = event.target.closest('[data-ai-verify]');
@@ -249,6 +261,20 @@ function bindEvents() {
     const raw = state.currentMessage?.text || state.currentMessage?.intro || state.currentMessage?.subject || '';
     const text = decodeBase64IfNeeded(raw);
     copyText(text, 'تم نسخ نص الرسالة');
+  });
+  $('reader-confirm-rule-btn')?.addEventListener('click', () => {
+    const banner = $('reader-learning-banner');
+    const inboxId = banner?.getAttribute('data-inbox-id');
+    const msgId = banner?.getAttribute('data-msg-id');
+    const subject = banner?.getAttribute('data-msg-subject');
+    if (inboxId) submitAiFeedback(inboxId, msgId, 'confirm', subject);
+  });
+  $('reader-reject-rule-btn')?.addEventListener('click', () => {
+    const banner = $('reader-learning-banner');
+    const inboxId = banner?.getAttribute('data-inbox-id');
+    const msgId = banner?.getAttribute('data-msg-id');
+    const subject = banner?.getAttribute('data-msg-subject');
+    if (inboxId) submitAiFeedback(inboxId, msgId, 'reject', subject);
   });
 
   window.addEventListener('popstate', event => {
@@ -395,6 +421,32 @@ const autoCheckedInboxes = new Set();
 function findInboxById(id) {
   if (!id) return null;
   return [...state.official, ...state.temp, ...state.amazon, ...state.banned, ...(state.suspected || [])].find(i => i.id === id || i.email === id);
+}
+
+function findSuspectedMessageForInbox(inbox) {
+  if (!inbox) return null;
+  const email = String(inbox.email || '').toLowerCase().trim();
+  const allMsgs = [...state.messages, ...(state.officialMessages || []), ...(state.amazonMessages || []), ...(state.bannedMessages || [])];
+  return allMsgs.find(m => (String(m.inboxEmail || '').toLowerCase().trim() === email || formatAddress(m.to).toLowerCase().includes(email)) && isBannedMessage(m));
+}
+
+async function submitAiFeedback(inboxId, messageId, verdict, subject = '') {
+  try {
+    await api('/api/ai/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inboxId, messageId, verdict, subject })
+    });
+    if (verdict === 'confirm') {
+      toast('تم تأكيد إغلاق الحساب وتسجيل الحالة ⛔');
+    } else {
+      toast('تم استبعاد هذا النمط وتحديث قواعد النظام بنجاح 🧠');
+    }
+    if (state.currentMessage) closeReader(false);
+    await refreshEverything();
+  } catch (err) {
+    toast(friendlyError(err), true);
+  }
 }
 
 async function autoVerifySuspectedInboxes() {
@@ -582,7 +634,7 @@ function renderInboxes() {
     const unread = isInboxUnread(inbox);
     const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
     const id = encodeURIComponent(inbox.id || '');
-    const reason = inbox.banReason || 'محظور';
+    const suspectMsg = suspected ? findSuspectedMessageForInbox(inbox) : null;
     return `<article tabindex="0" role="button" class="inbox-item ${official ? 'official' : ''} ${inbox.id === state.activeId ? 'active' : ''} ${unread ? 'has-unread' : ''} ${suspected ? 'is-suspected' : ''}" data-inbox-id="${attr(id)}">
       <div class="inbox-item-avatar">
         ${banned ? '⛔' : suspected ? '⚠️' : amazon ? '🛒' : official ? '♛' : initials(label)}
@@ -597,14 +649,14 @@ function renderInboxes() {
         <span>${html(inbox.email || '')}</span>
         ${suspected ? `
         <div class="ban-confirm-inline" onclick="event.stopPropagation()">
-          <span class="ban-confirm-q">هل تم حظر هذا الحساب فعلاً؟</span>
+          <span class="ban-confirm-q">اشتباه حظر بانتظار تأكيدك أو استبعاد النمط:</span>
           <div class="ban-confirm-btns">
-            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
-            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
-            <button class="btn-ai-verify" type="button" data-ai-verify="${attr(inbox.id)}" title="تحقق بالذكاء الاصطناعي">فحص AI 🤖</button>
+            ${suspectMsg ? `<button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(suspectMsg.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>` : ''}
+            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
-      </div>
+      </div>`
       <span class="inbox-count ${unread ? 'unread' : ''}">${formatNumber(inbox.messageCount || 0)}</span>
       <button class="inbox-more" data-delete-id="${attr(id)}" title="حذف الصندوق" aria-label="حذف الصندوق"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg></button>
     </article>`;
@@ -842,11 +894,11 @@ function renderAmazonMessages() {
         <div class="message-preview">${html(message.intro || message.text || formatAddress(message.to) || '')}</div>
         ${isSuspected && inbox ? `
         <div class="ban-confirm-inline" onclick="event.stopPropagation()">
-          <span class="ban-confirm-q">هل تم حظر أو تقييد هذا الحساب فعلاً؟</span>
+          <span class="ban-confirm-q">اشتباه حظر بانتظار قرارك لتحديد القاعدة:</span>
           <div class="ban-confirm-btns">
-            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
-            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" title="الحساب سليم">الحساب سليم ✅</button>
-            <button class="btn-ai-verify" type="button" data-ai-verify="${attr(inbox.id)}" title="تحقق بالذكاء الاصطناعي">فحص AI 🤖</button>
+            <button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(message.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>
+            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
       </div>
@@ -1100,6 +1152,21 @@ async function openMessage(id, pushHistory = true) {
         if ($('reader-ban-desc')) $('reader-ban-desc').textContent = getBanDetailText(message);
       } else {
         banAlert.classList.add('hidden');
+      }
+    }
+
+    // Update Rule Training & Learning Banner in Reader
+    const learningBanner = $('reader-learning-banner');
+    if (learningBanner) {
+      const parentInbox = state.activeInbox || findInboxByEmail(message.inboxEmail);
+      const isSuspected = isBanned || isSuspectedInbox(parentInbox) || isBannedMessage(message);
+      if (isSuspected && parentInbox) {
+        learningBanner.classList.remove('hidden');
+        learningBanner.setAttribute('data-inbox-id', parentInbox.id);
+        learningBanner.setAttribute('data-msg-id', message.id);
+        learningBanner.setAttribute('data-msg-subject', message.subject || '');
+      } else {
+        learningBanner.classList.add('hidden');
       }
     }
 

@@ -921,7 +921,7 @@ class InboxDatabase {
     const defaultVersion = {
       latestVersionCode: 6,
       latestVersionName: "1.3.2",
-      downloadUrl: "https://batabitoo-mail-2026.web.app/releases/Batabitoo-Mail-Center-1.3.2.apk",
+      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.2/Batabitoo-Mail-Center-1.3.2.apk",
       releaseNotes: "تعديل زر إنشاء الحسابات بالتتابع ليبدأ دائماً من الرقم 1 تلقائياً (مثل ahmedroou1).",
       mandatory: false,
       updatedAt: new Date().toISOString()
