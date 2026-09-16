@@ -329,8 +329,35 @@ class InboxDatabase {
 
   async setInboxBanStatus(inboxId, status, reason = '') {
     const data = this.readLocal();
-    const inbox = (data.inboxes || []).find(i => i.id === inboxId || (i.email && i.email.toLowerCase() === inboxId.toLowerCase()));
-    if (!inbox) return null;
+    data.inboxes = data.inboxes || [];
+
+    const clean = String(inboxId || '').trim().toLowerCase();
+    let inbox = data.inboxes.find(i =>
+      String(i.id).toLowerCase() === clean ||
+      (i.email && i.email.toLowerCase() === clean) ||
+      (i.email && i.email.toLowerCase().split('@')[0] === clean)
+    );
+
+    if (!inbox) {
+      // Auto-register missing inbox record on-the-fly
+      const isEmail = clean.includes('@');
+      const email = isEmail ? clean : `${clean}@batabitoo.com`;
+      const isOfficial = email.endsWith('@batabitoo.com');
+
+      inbox = {
+        id: isEmail ? `inbox_${clean.replace(/[^a-z0-9]/g, '_')}` : (clean || `official_${Date.now()}`),
+        email: email,
+        domain: isOfficial ? 'batabitoo.com' : (email.split('@')[1] || 'temp'),
+        host: isOfficial ? 'batabitoo.com (Official Trusted)' : 'Temp Mail Service',
+        isOfficial: isOfficial,
+        type: isOfficial ? 'official' : 'temp',
+        label: email.split('@')[0],
+        personName: email.split('@')[0],
+        createdAt: new Date().toISOString(),
+        messageCount: 0
+      };
+      data.inboxes.push(inbox);
+    }
 
     inbox.banStatus = status; // 'confirmed' | 'safe' | 'suspected'
     inbox.isBanned = status === 'confirmed';
@@ -348,6 +375,10 @@ class InboxDatabase {
     if (this.isCloudConnected && this.db) {
       try {
         await this.db.collection('inboxes').doc(inbox.id).set(sanitizeForFirestore({
+          id: inbox.id,
+          email: inbox.email,
+          isOfficial: inbox.isOfficial,
+          type: inbox.type,
           isBanned: inbox.isBanned,
           banStatus: inbox.banStatus,
           banReason: inbox.banReason || null,
@@ -419,8 +450,34 @@ class InboxDatabase {
    */
   async aiVerifyInbox(inboxId) {
     const data = this.readLocal();
-    const inbox = (data.inboxes || []).find(i => i.id === inboxId || (i.email && i.email.toLowerCase() === inboxId.toLowerCase()));
-    if (!inbox) return null;
+    data.inboxes = data.inboxes || [];
+
+    const clean = String(inboxId || '').trim().toLowerCase();
+    let inbox = data.inboxes.find(i =>
+      String(i.id).toLowerCase() === clean ||
+      (i.email && i.email.toLowerCase() === clean) ||
+      (i.email && i.email.toLowerCase().split('@')[0] === clean)
+    );
+
+    if (!inbox) {
+      const isEmail = clean.includes('@');
+      const email = isEmail ? clean : `${clean}@batabitoo.com`;
+      const isOfficial = email.endsWith('@batabitoo.com');
+      inbox = {
+        id: isEmail ? `inbox_${clean.replace(/[^a-z0-9]/g, '_')}` : (clean || `official_${Date.now()}`),
+        email: email,
+        domain: isOfficial ? 'batabitoo.com' : (email.split('@')[1] || 'temp'),
+        host: isOfficial ? 'batabitoo.com (Official Trusted)' : 'Temp Mail Service',
+        isOfficial: isOfficial,
+        type: isOfficial ? 'official' : 'temp',
+        label: email.split('@')[0],
+        personName: email.split('@')[0],
+        createdAt: new Date().toISOString(),
+        messageCount: 0
+      };
+      data.inboxes.push(inbox);
+      this.writeLocal(data);
+    }
 
     const messages = data.messages || [];
     const matchingMsgs = messages.filter(m => (String(m.inboxEmail || '').toLowerCase().trim() === String(inbox.email || '').toLowerCase().trim()));
@@ -919,10 +976,10 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 6,
-      latestVersionName: "1.3.2",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.2/Batabitoo-Mail-Center-1.3.2.apk",
-      releaseNotes: "تعديل زر إنشاء الحسابات بالتتابع ليبدأ دائماً من الرقم 1 تلقائياً (مثل ahmedroou1).",
+      latestVersionCode: 7,
+      latestVersionName: "1.3.3",
+      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.3/Batabitoo-Mail-Center-1.3.3.apk",
+      releaseNotes: "إصلاح خطأ تأكيد الحظر (Not Found)، وإعادة تصميم أزرار تصفية أمازون وبطاقات الحسابات لإظهار البريد كاملاً وتنظيم الأزرار بالأسفل.",
       mandatory: false,
       updatedAt: new Date().toISOString()
     };
