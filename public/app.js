@@ -176,6 +176,7 @@ async function init() {
 function bindEvents() {
   $('refresh-all').addEventListener('click', refreshEverything);
   $('refresh-current').addEventListener('click', () => loadCurrent(false));
+  $('sync-remote-btn')?.addEventListener('click', syncActiveRemoteInbox);
   $('copy-email').addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد'));
   $('new-inbox-top').addEventListener('click', openCreateModal);
   $('new-inbox-side').addEventListener('click', openCreateModal);
@@ -1139,6 +1140,7 @@ async function loadCounts() {
   $('temp-message-count').textContent = formatNumber(data.counts?.temp || 0);
   if ($('amazon-message-count')) $('amazon-message-count').textContent = formatNumber(data.counts?.amazon || state.amazonMessages.length);
   if ($('banned-message-count')) $('banned-message-count').textContent = formatNumber(data.counts?.banned || state.bannedMessages.length);
+  if ($('winning-message-count')) $('winning-message-count').textContent = formatNumber(data.counts?.winning || getWinningMessages().length);
   $('stat-messages').textContent = formatNumber(data.counts?.total || 0);
   updateFilterUnreadDots();
 }
@@ -1171,6 +1173,42 @@ async function loadCurrent(silent = false) {
   }
 }
 
+async function syncActiveRemoteInbox() {
+  const btn = $('sync-remote-btn');
+  const inbox = state.activeInbox || findInboxById(state.activeId);
+  const email = inbox?.email;
+  if (!email) {
+    toast('يرجى اختيار صندوق بريد سريع أولاً', 'info');
+    return;
+  }
+  setBusy(btn, true, 'جاري السحب... ⚡');
+  try {
+    const res = await api('/api/inbox/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: inbox.id, email })
+    });
+
+    if (res.sync?.newCount > 0) {
+      toast(`🎉 تم سحب ${res.sync.newCount} رسالة جديدة بنجاح!`);
+      if (res.sync.hasWinning) {
+        toast('🏆 تم اكتشاف رسالة مسابقة وفوز جديدة!', 'success');
+      }
+    } else if (res.sync?.rateLimited) {
+      toast('⏳ خادم البريد الخارجي في فترة تبريد مؤقتة، جاري عرض الرسائل المحفوظة', 'info');
+    } else {
+      toast('الصندوق محدث، لا توجد رسائل جديدة في الخادم الخارجي');
+    }
+
+    await loadCurrent(true);
+    await loadCounts();
+  } catch (e) {
+    toast('تعذر إتمام المزامنة: ' + friendlyError(e), true);
+  } finally {
+    setBusy(btn, false, 'مزامنة سريعة ⚡');
+  }
+}
+
 async function loadSeparated(type) {
   showContentSkeleton();
   try {
@@ -1178,6 +1216,7 @@ async function loadSeparated(type) {
     if (type === 'official') state.officialMessages = (data.messages || []).map(m => ({ ...m, isBanned: isBannedMessage(m), isAmazon: isAmazonMessage(m) }));
     else if (type === 'amazon') state.amazonMessages = (data.messages || []).map(m => ({ ...m, isAmazon: true }));
     else if (type === 'banned') state.bannedMessages = (data.messages || []).map(m => ({ ...m, isBanned: true, isAmazon: true }));
+    else if (type === 'winning') state.winningMessages = data.messages || [];
     else state.tempMessages = data.messages || [];
     renderContent();
   } catch (error) {
@@ -1334,15 +1373,35 @@ function switchContentView(view, pushHistory = true) {
 
   const map = {
     current: ['البريد الوارد', 'أحدث الرسائل', 'بحث في الرسائل'],
+    winning: ['رسائل الفوز والمسابقات', 'إشعارات الفوز والجوائز المكتشفة', 'بحث في رسائل الفوز'],
     banned: ['الحسابات المحظورة', 'رسائل الحظر والتقييد بالمشتريات الرقمية', 'بحث في رسائل الحظر والتقييد'],
     official: ['البريد الرسمي', 'رسائل النطاق الرسمي', 'بحث في الرسائل الرسمية'],
     temp: ['البريد السريع', 'رسائل النطاقات المؤقتة', 'بحث في الرسائل السريعة'],
     logs: ['سجل الحملة', 'تسجيلات نيفيا', 'بحث بالاسم أو الجوال']
   };
   [$('view-kicker').textContent, $('view-title').textContent, $('content-search').placeholder] = map[view] || map.current;
-  if (view === 'official' || view === 'temp' || view === 'banned') loadSeparated(view);
+  if (view === 'official' || view === 'temp' || view === 'banned' || view === 'winning') loadSeparated(view);
   else if (view === 'logs') loadLogs(true).catch(error => showEmpty('تعذر تحميل السجل', friendlyError(error)));
   else renderContent();
+}
+
+function isWinningMessage(msg) {
+  if (!msg) return false;
+  if (msg.isWinning) return true;
+  const combined = `${msg.subject || ''} ${msg.intro || ''} ${msg.text || ''} ${formatAddress(msg.from) || ''}`.toLowerCase();
+  const kw = ['مبروك', 'تهانينا', 'فائز', 'فزت', 'ربحت', 'جائزة', 'مسابقة', 'سحب', 'هدية', 'winner', 'won', 'congratulations', 'congrats', 'prize', 'nivea'];
+  return kw.some(k => combined.includes(k));
+}
+
+function getWinningMessages() {
+  const all = [...(state.messages || []), ...(state.tempMessages || []), ...(state.officialMessages || [])];
+  const map = new Map();
+  for (const m of all) {
+    if (m && m.id && !map.has(m.id)) {
+      if (isWinningMessage(m)) map.set(m.id, m);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 }
 
 function renderContent() {
@@ -1356,7 +1415,11 @@ function renderContent() {
     renderLogs(logs);
     return;
   }
-  const source = state.view === 'current' ? state.messages : state.view === 'banned' ? state.bannedMessages : state.view === 'official' ? state.officialMessages : state.tempMessages;
+  const source = state.view === 'current' ? state.messages 
+               : state.view === 'winning' ? (state.winningMessages?.length ? state.winningMessages : getWinningMessages())
+               : state.view === 'banned' ? state.bannedMessages 
+               : state.view === 'official' ? state.officialMessages 
+               : state.tempMessages;
   const list = query ? source.filter(message => normalize([formatAddress(message.from), formatAddress(message.to), message.subject, message.text, message.intro, message.otp, message.inboxEmail].join(' ')).includes(query)) : source;
   renderMessages(list);
 }
@@ -1367,15 +1430,17 @@ function renderMessages(messages) {
   $('message-list').innerHTML = messages.map(message => {
     const sender = cleanSenderName(message.from, message.subject);
     const otp = message.otp ? String(message.otp) : '';
+    const winning = isWinningMessage(message);
     const banned = isBannedMessage(message);
     const amazon = !banned && isAmazonMessage(message);
     const reason = getBanReason(message);
     return `<article class="message-card" data-message-id="${attr(encodeURIComponent(message.id || ''))}">
-      <div class="sender-avatar">${banned ? '⛔' : amazon ? '🛒' : initials(sender)}</div>
+      <div class="sender-avatar">${winning ? '🏆' : banned ? '⛔' : amazon ? '🛒' : initials(sender)}</div>
       <div class="message-main">
         <div class="message-top">
-          <strong style="display:inline-flex;align-items:center;gap:6px;">
+          <strong style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
             ${html(sender)}
+            ${winning ? '<span class="win-badge">🏆 فوز ومسابقة</span>' : ''}
             ${banned ? `<span class="banned-badge">⛔ ${html(reason)}</span>` : amazon ? '<span class="amazon-badge">أمازون</span>' : ''}
           </strong>
           <time>${html(formatDate(message.createdAt))}</time>
