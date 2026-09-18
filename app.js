@@ -147,7 +147,14 @@ async function init() {
   const hour = new Date().getHours();
   document.querySelector('.brand-copy > span').textContent = hour < 12 ? 'صباح الخير 👋' : 'مساء الخير 👋';
   updateActiveInbox();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if ('caches' in window) {
+    caches.keys().then(names => {
+      names.forEach(n => { if (n !== 'batabitoo-mail-v25-nocache') caches.delete(n); });
+    }).catch(() => {});
+  }
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').then(reg => reg.update()).catch(() => {});
+  }
 
   // Check Google OAuth URL parameters
   const urlParams = new URLSearchParams(window.location.search);

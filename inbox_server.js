@@ -6,6 +6,7 @@ const db = require('./InboxDatabase');
 const emailParser = require('./EmailParser');
 const content = require('./MailContent');
 const gmailSync = require('./GmailSyncService');
+const tempSync = require('./TempSyncService');
 
 const PORT = Number(process.env.PORT || 3030);
 const service = new RealInboxService();
@@ -52,6 +53,7 @@ process.on('unhandledRejection', (reason) => {
 
 const ready = cleanupExistingMessages().then(() => {
   gmailSync.startAll();
+  tempSync.startAutoSync(3);
 });
 
 const server = http.createServer(async (req, res) => {
@@ -528,30 +530,9 @@ const server = http.createServer(async (req, res) => {
 
       if (!active.isOfficial) {
         try {
-          const remoteMessages = await service.getMessages(active);
-          if (remoteMessages && remoteMessages.length > 0) {
-            const cleanedRemote = [];
-            for (const m of remoteMessages) {
-              const msgId = m.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-              const existing = db.getAllMessages().find(item => item.id === msgId);
-              // List APIs contain snippets, not complete messages. Never replace a fetched body with one.
-              cleanedRemote.push({
-                ...(existing || { contentComplete: false, bodyStatus: 'pending' }),
-                from: emailParser.formatAddress(m.from),
-                to: emailParser.formatAddress(m.to) || active.email,
-                subject: emailParser.decodeRfc2047(m.subject || existing?.subject || '(بدون عنوان)'),
-                intro: existing?.intro || m.intro || '',
-                createdAt: m.createdAt || existing?.createdAt,
-                id: msgId,
-                inboxEmail: active.email,
-                isOfficialDomain: false,
-                domain: active.domain || 'inboxes.com'
-              });
-            }
-            await db.saveMessages(active.email, cleanedRemote);
-          }
+          await tempSync.syncInbox(active);
         } catch(e) {
-          console.error('Remote inbox fetch error:', e.message);
+          console.error('Remote inbox sync error:', e.message);
         }
       }
 
@@ -559,6 +540,69 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(200, {
         inbox: active,
         messages: localMessages.map(content.summary)
+      });
+    }
+
+    // ============================================================
+    // 4.1 REMOTE TEMP MAIL SYNC & WINNING ENDPOINTS
+    // ============================================================
+    if (url.pathname === '/api/inbox/sync' && req.method === 'POST') {
+      const payload = await parseBody().catch(() => ({}));
+      const allInboxes = db.getAllInboxes();
+      let target = null;
+      if (payload?.id || payload?.email) {
+        target = allInboxes.find(i => (i.id === (payload.id || payload.email)) || (i.email?.toLowerCase() === (payload.email || payload.id)?.toLowerCase()));
+      }
+      if (!target) {
+        target = db.getActiveInbox();
+      }
+      if (!target) {
+        return sendJSON(404, { success: false, error: 'No active inbox to sync' });
+      }
+
+      if (target.isOfficial) {
+        if (target.email?.endsWith('@gmail.com')) {
+          try {
+            const res = await gmailSync.syncAccount(target.email);
+            return sendJSON(200, res);
+          } catch(e) {
+            return sendJSON(400, { success: false, error: e.message });
+          }
+        }
+        return sendJSON(200, { success: true, message: 'Official domain batabitoo.com uses real-time webhook' });
+      }
+
+      const syncRes = await tempSync.syncInbox(target, { forceFull: true });
+      const localMessages = db.getMessagesForInbox(target.email);
+      return sendJSON(200, {
+        success: true,
+        inbox: target,
+        sync: syncRes,
+        messages: localMessages.map(content.summary)
+      });
+    }
+
+    if (url.pathname === '/api/inboxes/sync-all' && req.method === 'POST') {
+      if (tempSync.isSyncAllRunning) {
+        return sendJSON(200, { success: true, running: true, message: 'المزامنة الخلفية جارية بالفعل حالياً.' });
+      }
+      tempSync.syncAllInboxes({ intervalMs: 2500 }).catch(err => {
+        console.error('Bulk sync background error:', err.message);
+      });
+      return sendJSON(200, { success: true, message: 'تم بدء مزامنة كافة صناديق البريد السريع في الخلفية.' });
+    }
+
+    if (url.pathname === '/api/inboxes/sync-status' && req.method === 'GET') {
+      return sendJSON(200, tempSync.getStatus());
+    }
+
+    if (url.pathname === '/api/messages/winning' && req.method === 'GET') {
+      const all = db.getAllMessages();
+      const winning = all.filter(m => m.isWinning || tempSync.detectWinningEmail(m.subject, m.text || m.intro, m.from).isWinning);
+      return sendJSON(200, {
+        success: true,
+        count: winning.length,
+        messages: winning.map(content.summary)
       });
     }
 

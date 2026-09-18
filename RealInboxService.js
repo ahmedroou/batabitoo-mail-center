@@ -133,33 +133,73 @@ class RealInboxService {
     };
   }
 
+  isRateLimited() {
+    return this.rateLimitUntil && Date.now() < this.rateLimitUntil;
+  }
+
   // Get messages for an inbox
   async getMessages(inbox) {
     if (!inbox || !inbox.email) return [];
 
-    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com') {
+    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain)) {
+      if (this.isRateLimited()) {
+        const remainingSec = Math.ceil((this.rateLimitUntil - Date.now()) / 1000);
+        console.warn(`⏳ [inboxes.com] Rate limit in effect. Cooldown remaining: ${remainingSec}s`);
+        return [];
+      }
+
       try {
         const res = await this.request(`https://inboxes.com/api/v2/inbox/${encodeURIComponent(inbox.email)}`);
-        const msgs = res.msgs || [];
+        if (typeof res === 'string' && (res.includes('too many requests') || res.includes('not allowed'))) {
+          this.rateLimitUntil = Date.now() + 65000;
+          console.warn('⚠️ [inboxes.com] Rate limit hit ("too many requests"). Pausing requests for 65 seconds.');
+          return [];
+        }
+        if (res && res.statusCode === 403) {
+          this.rateLimitUntil = Date.now() + 65000;
+          console.warn('⚠️ [inboxes.com] Rate limit hit (403). Pausing requests for 65 seconds.');
+          return [];
+        }
+        const msgs = Array.isArray(res?.msgs) ? res.msgs : [];
         return msgs.map(m => ({
           id: m.uid,
           from: { address: m.fe || m.f, name: m.f },
           to: [{ address: inbox.email }],
           subject: m.s || '(بدون عنوان)',
-          intro: m.s || '',
-          createdAt: m.dt || new Date().toISOString()
+          intro: m.ph || m.s || '',
+          createdAt: m.cr || m.dt || new Date().toISOString()
         }));
       } catch(e) {
+        if (e.statusCode === 403 || (e.message && e.message.includes('Rate limit')) || (e.message && e.message.includes('too many requests'))) {
+          this.rateLimitUntil = Date.now() + 65000;
+          console.warn('⚠️ [inboxes.com] Rate limit encountered. Set cooldown for 65 seconds.');
+        }
         return [];
       }
     }
 
     const host = inbox.host || 'api.mail.tm';
     try {
-      const res = await this.request(`https://${host}/messages`, {
-        headers: { 'Authorization': `Bearer ${inbox.token}` }
-      });
-      return Array.isArray(res) ? res : (res['hydra:member'] || []);
+      let res;
+      try {
+        res = await this.request(`https://${host}/messages`, {
+          headers: { 'Authorization': `Bearer ${inbox.token}` }
+        });
+      } catch (authErr) {
+        if (authErr.statusCode === 401 && inbox.password) {
+          const login = await this.request(`https://${host}/token`, { method: 'POST' }, {
+            address: inbox.email,
+            password: inbox.password
+          });
+          if (login && login.token) {
+            inbox.token = login.token;
+            res = await this.request(`https://${host}/messages`, {
+              headers: { 'Authorization': `Bearer ${inbox.token}` }
+            });
+          }
+        }
+      }
+      return Array.isArray(res) ? res : (res?.['hydra:member'] || []);
     } catch(e) {
       return [];
     }
@@ -169,31 +209,72 @@ class RealInboxService {
   async getMessage(inbox, messageId) {
     if (!inbox || !messageId) return null;
 
-    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com') {
+    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain)) {
+      if (this.isRateLimited()) {
+        return null;
+      }
+
       try {
         const res = await this.request(`https://inboxes.com/api/v2/message/${encodeURIComponent(messageId)}`);
+        if (typeof res === 'string' && (res.includes('too many requests') || res.includes('not allowed'))) {
+          this.rateLimitUntil = Date.now() + 65000;
+          return null;
+        }
+        if (res && res.statusCode === 403) {
+          this.rateLimitUntil = Date.now() + 65000;
+          return null;
+        }
+        if (typeof res !== 'object' || !res) {
+          return null;
+        }
+
+        const senderRaw = res.f || res.fe || '';
+        const senderFromList = Array.isArray(res.ff) && res.ff.length > 0 ? res.ff[0] : null;
+        const senderAddress = senderFromList?.address || (senderRaw.match(/<([^<>]+)>/)?.[1] || senderRaw).trim();
+        const senderName = senderFromList?.name || senderRaw.split('<')[0].replace(/["']/g, '').trim() || senderAddress;
+
         return {
           id: res.uid || messageId,
-          from: { address: res.fe || res.f, name: res.f },
+          from: { address: senderAddress, name: senderName },
           to: [{ address: inbox.email }],
           subject: res.s || '(بدون عنوان)',
-          intro: res.text ? res.text.slice(0, 100) : res.s,
+          intro: res.text ? res.text.slice(0, 140).trim() : (res.s || ''),
           text: res.text || '',
           html: res.html || '',
           raw: res.raw || '',
-          attachments: res.attachments || [],
-          createdAt: res.dt || new Date().toISOString()
+          attachments: res.at || res.attachments || [],
+          createdAt: res.cr || res.dt || new Date().toISOString()
         };
       } catch(e) {
+        if (e.statusCode === 403 || (e.message && e.message.includes('Rate limit'))) {
+          this.rateLimitUntil = Date.now() + 65000;
+        }
         return null;
       }
     }
 
     const host = inbox.host || 'api.mail.tm';
     try {
-      return await this.request(`https://${host}/messages/${messageId}`, {
-        headers: { 'Authorization': `Bearer ${inbox.token}` }
-      });
+      let res;
+      try {
+        res = await this.request(`https://${host}/messages/${messageId}`, {
+          headers: { 'Authorization': `Bearer ${inbox.token}` }
+        });
+      } catch (authErr) {
+        if (authErr.statusCode === 401 && inbox.password) {
+          const login = await this.request(`https://${host}/token`, { method: 'POST' }, {
+            address: inbox.email,
+            password: inbox.password
+          });
+          if (login && login.token) {
+            inbox.token = login.token;
+            res = await this.request(`https://${host}/messages/${messageId}`, {
+              headers: { 'Authorization': `Bearer ${inbox.token}` }
+            });
+          }
+        }
+      }
+      return res || null;
     } catch(e) {
       return null;
     }
