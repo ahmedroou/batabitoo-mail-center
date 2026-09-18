@@ -73,15 +73,35 @@ class MailRepository(context: Context) {
             MailJson.inboxes(fetchCached("inboxes", "/api/inboxes"))
         }.getOrNull()
 
-        if (fromServer != null && (fromServer.official.isNotEmpty() || fromServer.temp.isNotEmpty())) {
-            return@withContext fromServer
-        }
-
         val fromFirestore = runCatching {
             val raw = directGet(FIRESTORE_INBOXES_URL)
             preferences.edit().putString("cache_inboxes_firestore_raw", raw).apply()
             MailJson.firestoreInboxes(raw)
         }.getOrNull()
+
+        if (fromServer != null && (fromServer.official.isNotEmpty() || fromServer.temp.isNotEmpty())) {
+            // The edge inbox service can be behind on ban fields. Merge only account
+            // classification metadata from Firestore while keeping its complete list.
+            val cloudById = fromFirestore?.official.orEmpty().associateBy { it.id }
+            val cloudByEmail = fromFirestore?.official.orEmpty().associateBy { it.email.lowercase() }
+            val official = fromServer.official.map { inbox ->
+                val cloud = cloudById[inbox.id] ?: cloudByEmail[inbox.email.lowercase()]
+                if (cloud == null) inbox else inbox.copy(
+                    isAmazon = cloud.isAmazon,
+                    isBanned = cloud.isBanned,
+                    banStatus = cloud.banStatus,
+                    banReason = cloud.banReason.ifBlank { inbox.banReason },
+                )
+            }
+            return@withContext InboxesPayload(
+                activeId = fromServer.activeId,
+                official = official,
+                temp = fromServer.temp,
+                amazon = official.filter { it.isAmazon },
+                banned = official.filter { it.isConfirmedBanned },
+                suspected = official.filter { it.isSuspected },
+            )
+        }
 
         if (fromFirestore != null && (fromFirestore.official.isNotEmpty() || fromFirestore.temp.isNotEmpty())) {
             return@withContext fromFirestore
@@ -219,7 +239,7 @@ class MailRepository(context: Context) {
             } else null
         }.getOrNull()
 
-        firestoreResult ?: "{\"success\":true}"
+        firestoreResult ?: throw IOException("تعذر حفظ حالة الحساب في الخدمة العامة والتخزين السحابي")
     }
 
     suspend fun triggerAiVerify(id: String): String = withContext(Dispatchers.IO) {

@@ -872,6 +872,10 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 suspectedAccounts = suspectedAmazonInboxes.size,
                 bannedAccounts = bannedAmazonInboxes.size,
                 messagesCount = amazonMessages.size,
+                nextAccount = viewModel.getNextSequentialPrefix(),
+                refreshing = state.refreshing,
+                onCreate = { viewModel.createSequentialInbox() },
+                onRefresh = { viewModel.refreshAll() },
             )
         }
 
@@ -910,18 +914,6 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 }
             }
 
-            MailPills(
-                listOf(
-                    "الكل (${arabicNumber(allAmazonInboxes.size)})",
-                    "اشتباه ⚠️ (${arabicNumber(suspectedAmazonInboxes.size)})",
-                    "محظورة ⛔ (${arabicNumber(bannedAmazonInboxes.size)})",
-                    "سليمة ✅ (${arabicNumber(healthyAmazonInboxes.size)})",
-                    "رسائل 🔑 (${arabicNumber(amazonMessages.size)})",
-                ),
-                state.amazonTab.ordinal,
-            ) { viewModel.setAmazonTab(AmazonTab.entries[it]) }
-
-            Spacer(Modifier.height(8.dp))
             SearchField(
                 state.search,
                 if (state.amazonTab == AmazonTab.MESSAGES) "ابحث في رسائل وأكواد أمازون..." else "ابحث في حسابات أمازون...",
@@ -1002,6 +994,10 @@ private fun AmazonUniverseHero(
     suspectedAccounts: Int,
     bannedAccounts: Int,
     messagesCount: Int,
+    nextAccount: String,
+    refreshing: Boolean,
+    onCreate: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "amazonHero")
     val floatOffset by infiniteTransition.animateFloat(
@@ -1125,6 +1121,37 @@ private fun AmazonUniverseHero(
                         color = Color(0xFFFFB74D),
                         modifier = Modifier.weight(1f),
                     )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = onCreate,
+                        enabled = !refreshing,
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFF9900),
+                            contentColor = Color(0xFF131921),
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("إنشاء $nextAccount", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onRefresh,
+                        enabled = !refreshing,
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    ) {
+                        if (refreshing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                        else Icon(Icons.Rounded.Refresh, contentDescription = "تحديث حسابات أمازون", modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }

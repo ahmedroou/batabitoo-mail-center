@@ -1,0 +1,178 @@
+/* Amazon accounts: a full-width, fast operations surface. */
+body[data-screen="amazon"] .sidebar,
+body[data-screen="amazon"] .active-inbox-bar { display:none !important; }
+body[data-screen="amazon"] .workspace { display:block; min-height:0; margin-top:18px; }
+body[data-screen="amazon"] .content-panel { display:block; width:100%; max-width:1320px; margin-inline:auto; }
+body[data-screen="amazon"] .amazon-hub-shell { gap:18px; }
+
+.amazon-hub-hero {
+  grid-template-columns:minmax(0,1.15fr) minmax(390px,.85fr);
+  min-height:282px;
+  padding:34px 38px;
+  border-radius:30px;
+  background:
+    radial-gradient(circle at 12% 18%,rgba(255,153,0,.22),transparent 26%),
+    radial-gradient(circle at 82% 110%,rgba(85,103,255,.23),transparent 38%),
+    linear-gradient(135deg,#090d13 0%,#131c29 47%,#202d3d 100%);
+  background-size:auto;
+  animation:none;
+  box-shadow:0 28px 70px rgba(15,23,42,.23),inset 0 1px rgba(255,255,255,.08);
+  isolation:isolate;
+}
+.amazon-hub-hero::before {
+  content:"";
+  width:360px;height:360px;top:-170px;right:-80px;
+  border:1px solid rgba(255,255,255,.1);
+  background:repeating-radial-gradient(circle,transparent 0 30px,rgba(255,255,255,.035) 31px 32px);
+  animation:none;
+}
+.amazon-hub-hero::after {
+  content:"a";
+  display:grid;place-items:center;
+  width:175px;height:175px;left:42px;bottom:-62px;
+  border-radius:52px;
+  color:rgba(255,153,0,.13);
+  font:900 154px/1 Arial,sans-serif;
+  transform:rotate(-11deg);
+  background:linear-gradient(145deg,rgba(255,255,255,.08),rgba(255,255,255,.015));
+  border:1px solid rgba(255,255,255,.08);
+}
+.amazon-hero-main { position:relative; z-index:1; align-self:center; }
+.amazon-brand-badge {
+  gap:9px;margin-bottom:16px;padding:6px 12px 6px 7px;
+  color:#ffd08a;background:rgba(255,153,0,.1);border-color:rgba(255,184,77,.26);
+  letter-spacing:.03em;animation:none;
+}
+.amazon-brand-badge i { width:7px;height:7px;border-radius:50%;background:#3ddc97;box-shadow:0 0 0 5px rgba(61,220,151,.1); }
+.amazon-cart-icon { display:grid;place-items:center;width:26px;height:26px;border-radius:9px;background:#ff9900;color:#111827;font:900 19px/1 Arial; }
+.amazon-hero-main h2 { max-width:620px;margin-bottom:10px;font-size:clamp(25px,3vw,38px);line-height:1.35;letter-spacing:-.03em; }
+.amazon-hero-main p { max-width:580px;margin-bottom:26px;color:#b6c2d2;font-size:13px;line-height:1.9; }
+.amazon-hero-actions { gap:10px; }
+.amazon-create-btn,.amazon-hero-actions .soft-button {
+  height:50px;border-radius:16px !important;padding-inline:19px;font-weight:800;
+}
+.amazon-create-btn {
+  background:linear-gradient(135deg,#ffb02e,#ff8500) !important;
+  color:#141920 !important;box-shadow:0 12px 28px rgba(255,153,0,.25) !important;
+  animation:none !important;
+}
+.amazon-create-btn:hover { transform:translateY(-2px) !important;box-shadow:0 17px 34px rgba(255,153,0,.34) !important; }
+.amazon-hero-actions .soft-button { color:#eef4fb;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12); }
+.amazon-hero-actions .soft-button:hover { background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);transform:translateY(-2px); }
+
+.amazon-hero-stats { grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;position:relative;z-index:1; }
+.amazon-stat-tile {
+  min-height:100px;padding:15px 17px;text-align:start;cursor:pointer;
+  border-radius:20px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.105);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+}
+.amazon-stat-tile:hover,.amazon-stat-tile:focus-visible { background:rgba(255,255,255,.105);transform:translateY(-3px);outline:none;border-color:rgba(255,153,0,.55); }
+.amazon-stat-tile span { color:#b9c5d4;font-size:11px;letter-spacing:0;text-transform:none; }
+.amazon-stat-tile strong { color:white;font-size:28px;animation:none; }
+.amazon-stat-tile small { color:#748399;font-size:9px;font-weight:700; }
+.amazon-stat-tile.highlight-green { border-color:rgba(52,211,153,.19);background:rgba(52,211,153,.055); }
+.amazon-stat-tile.highlight-green strong { color:#65e4b3; }
+.amazon-stat-tile.highlight-amber { border-color:rgba(251,191,36,.19);background:rgba(251,191,36,.055); }
+.amazon-stat-tile.highlight-red { border-color:rgba(248,113,113,.19);background:rgba(248,113,113,.055); }
+
+.amazon-feed-container { gap:18px;padding:22px;border-radius:26px;box-shadow:0 15px 50px rgba(36,48,82,.07); }
+.amazon-filters-bar { flex-wrap:nowrap; }
+.amazon-view-tabs { padding:5px;border-radius:18px;background:#f1f3f8;overflow-x:auto; }
+.amazon-view-tabs button { height:42px;border:0;background:transparent;border-radius:13px;padding-inline:16px;box-shadow:none;color:#6c7587; }
+.amazon-view-tabs button:hover { transform:none;box-shadow:none;background:rgba(255,255,255,.7); }
+.amazon-view-tabs button.active,
+.amazon-view-tabs button[data-amazon-filter="all"].active,
+.amazon-view-tabs button[data-amazon-filter="otp"].active,
+.amazon-view-tabs button[data-amazon-filter="orders"].active { background:#fff;border:0;color:#17202e;box-shadow:0 5px 15px rgba(30,41,59,.08); }
+.amazon-view-tabs button.active::before { content:"";width:7px;height:7px;border-radius:50%;background:#ff9900;box-shadow:0 0 0 4px rgba(255,153,0,.12); }
+.amazon-view-tabs button b,.amazon-view-tabs button.active b { background:#e9edf4;color:#596579; }
+.amazon-filters-bar .search-box { min-width:260px;height:48px;border-radius:15px;background:#fafbfe;border-color:#e5e8ef; }
+.amazon-results-heading { display:flex;align-items:end;justify-content:space-between;gap:16px;padding:2px 2px 0; }
+.amazon-results-heading span { color:#8791a3;font-size:11px;font-weight:700; }
+.amazon-results-heading h3 { margin:3px 0 0;color:#182032;font-size:18px; }
+#amazon-results-count { padding:7px 11px;border-radius:10px;background:#f5f6fa;color:#687386;white-space:nowrap; }
+
+.amazon-account-grid {
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:12px;
+  overflow:visible;padding:0;border:0;
+}
+.amazon-account-card {
+  position:relative;display:flex;flex-direction:column;gap:13px;min-width:0;padding:17px;
+  border:1px solid #e7eaf0;border-radius:20px;background:linear-gradient(155deg,#fff,#fbfcff);
+  box-shadow:0 6px 18px rgba(30,41,59,.035);content-visibility:auto;contain-intrinsic-size:230px;
+  transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;
+}
+.amazon-account-card::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;border-radius:20px 0 0 20px;background:#37b77e;opacity:.75; }
+.amazon-account-card.suspected::before { background:#f2ac18; }
+.amazon-account-card.banned::before { background:#e75058; }
+.amazon-account-card:hover { transform:translateY(-3px);border-color:#d8dce5;box-shadow:0 16px 32px rgba(30,41,59,.08); }
+.amazon-account-card header { display:flex;align-items:center;gap:10px; }
+.amazon-account-card header > div:nth-child(2) { min-width:0;flex:1; }
+.amazon-account-card h4 { margin:0;color:#17202e;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.amazon-account-avatar { flex:0 0 42px;width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:#e9f8f1;color:#159162;font:900 24px/1 Arial; }
+.amazon-account-card.suspected .amazon-account-avatar { color:#b87800;background:#fff5dc; }
+.amazon-account-card.banned .amazon-account-avatar { color:#cc3542;background:#ffeaec; }
+.amazon-account-status { display:inline-flex;align-items:center;gap:5px;margin-top:3px;color:#159162;font-size:10px;font-weight:800; }
+.amazon-account-status::before { content:"";width:6px;height:6px;border-radius:50%;background:currentColor; }
+.suspected .amazon-account-status { color:#b87800; }
+.banned .amazon-account-status { color:#cc3542; }
+.amazon-account-count { flex:0 0 auto;padding:5px 8px;border-radius:9px;background:#f2f4f8;color:#768094;font-size:9px; }
+.amazon-account-email { display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:42px;padding:8px 11px;border:0;border-radius:12px;background:#f5f7fb;color:#333d4d;text-align:left;cursor:pointer; }
+.amazon-account-email span { min-width:0;overflow-wrap:anywhere;font:600 11px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.amazon-account-email svg { flex:0 0 16px;width:16px;fill:none;stroke:#8a94a6;stroke-width:1.8; }
+.amazon-account-email:hover { background:#fff4e5;color:#b86500; }
+.amazon-account-reason { margin:0;padding:9px 11px;border-radius:11px;background:#fff1f2;color:#a82e39;font-size:10px;line-height:1.7; }
+.amazon-account-card footer { display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:3px; }
+.amazon-account-card footer button { min-height:36px;padding:0 11px;border:0;border-radius:11px;background:#182334;color:white;font-size:10px;font-weight:800;cursor:pointer; }
+.amazon-account-card footer button:hover { background:#ff9900;color:#17202e;transform:translateX(-2px); }
+.amazon-account-card footer time { color:#9aa3b2;font-size:9px; }
+.amazon-review-actions { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:10px;border-radius:13px;background:#fff8e8;border:1px solid #f7dfaa; }
+.amazon-review-actions span { grid-column:1/-1;color:#885b00;font-size:10px;font-weight:800; }
+.amazon-review-actions button { min-height:31px;padding:4px;border:0;border-radius:9px;font-size:9px;font-weight:800;cursor:pointer;background:white;color:#735a21;box-shadow:inset 0 0 0 1px #efdcad; }
+.amazon-review-actions button:first-of-type { background:#d8404d;color:white;box-shadow:none; }
+.amazon-review-actions button:last-child { color:#7047c7; }
+.amazon-load-more { grid-column:1/-1;min-height:46px;border:1px dashed #d5dae4;border-radius:14px;background:#fafbfe;color:#596579;font-weight:800;cursor:pointer; }
+.amazon-load-more:hover { color:#b86500;border-color:#ffba51;background:#fff8ed; }
+.amazon-empty { grid-column:1/-1;display:grid;justify-items:center;padding:48px 16px;text-align:center; }
+.amazon-empty > span { display:grid;place-items:center;width:54px;height:54px;border-radius:18px;background:#e9f8f1;color:#159162;font-size:24px; }
+.amazon-empty h3 { margin:13px 0 4px;font-size:16px; }
+.amazon-empty p { margin:0 0 15px;color:#8791a3;font-size:12px; }
+.amazon-empty button { height:40px;padding:0 15px;border:0;border-radius:12px;background:#17202e;color:white;font-weight:800; }
+.amazon-message-stream { gap:8px; }
+.amazon-message-stream .message-card { content-visibility:auto;contain-intrinsic-size:90px; }
+
+@media(max-width:1050px) {
+  .amazon-hub-hero { grid-template-columns:1fr; }
+  .amazon-hero-stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .amazon-stat-tile { min-height:86px; }
+  .amazon-account-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:720px) {
+  body[data-screen="amazon"] .workspace { margin-top:4px; }
+  body[data-screen="amazon"] .content-panel { display:block; }
+  .amazon-hub-shell { padding-bottom:12px; }
+  .amazon-hub-hero { min-height:0;padding:22px 18px;border-radius:22px;gap:20px; }
+  .amazon-hub-hero::after { width:110px;height:110px;left:14px;bottom:-40px;border-radius:34px;font-size:95px; }
+  .amazon-hero-main h2 { font-size:25px; }
+  .amazon-hero-main p { font-size:12px;margin-bottom:18px; }
+  .amazon-hero-actions { flex-direction:row; }
+  .amazon-create-btn { flex:1; }
+  #amazon-copy-active-btn { display:none; }
+  .amazon-create-btn,.amazon-hero-actions .soft-button { width:auto;height:46px;min-width:46px;padding-inline:14px; }
+  .amazon-hero-actions .soft-button span { display:none; }
+  .amazon-hero-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .amazon-stat-tile { min-height:82px;padding:12px; }
+  .amazon-stat-tile strong { font-size:23px; }
+  .amazon-feed-container { padding:12px;border-radius:20px;gap:14px; }
+  .amazon-filters-bar { flex-direction:column;align-items:stretch; }
+  .amazon-view-tabs { width:100%; }
+  .amazon-view-tabs button { height:40px;padding-inline:13px; }
+  .amazon-filters-bar .search-box { width:100%;min-width:0; }
+  .amazon-account-grid { grid-template-columns:1fr; }
+  .amazon-account-card { padding:15px;border-radius:17px; }
+  .amazon-account-card:hover { transform:none; }
+  .amazon-results-heading h3 { font-size:16px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .amazon-hub-shell,.amazon-account-card,.amazon-create-btn,.amazon-stat-tile { animation:none !important;transition:none !important; }
+}

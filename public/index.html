@@ -17,6 +17,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=13">
   <link rel="stylesheet" href="/reader.css?v=2">
+  <link rel="stylesheet" href="/amazon.css?v=1">
 </head>
 <body>
   <div class="app-shell">
@@ -71,13 +72,13 @@
         <section class="amazon-hub-shell hidden" id="amazon-hub-shell" aria-label="مركز إدارة رسائل وحسابات أمازون">
           <div class="amazon-hub-hero">
             <div class="amazon-hero-main">
-              <div class="amazon-brand-badge"><span class="amazon-cart-icon">🛒</span><span>مركز أمازون المتكامل</span></div>
-              <h2>مركز رسائل ورموز وحسابات أمازون</h2>
-              <p>لوحة تحكم مركزية لاستخراج أكواد التحقق (OTP)، إدارة حسابات ahmedroou، ومراقبة تنبيهات الحظر والتقييد.</p>
+              <div class="amazon-brand-badge"><span class="amazon-cart-icon">a</span><span>Amazon Accounts</span><i></i></div>
+              <h2>حسابات أمازون، أوضح وأسرع</h2>
+              <p>تابع سلامة كل حساب، راجع حالات الاشتباه، وافتح الرسائل ورموز التحقق من مساحة واحدة.</p>
               <div class="amazon-hero-actions">
                 <button class="primary-button amazon-create-btn" id="amazon-quick-create-btn" type="button">
                   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-                  <span>إنشاء حساب تتابعي فوري (<b id="amazon-seq-name">ahmedroou</b>)</span>
+                  <span>إنشاء الحساب التالي <b id="amazon-seq-name">ahmedroou</b></span>
                 </button>
                 <button class="soft-button" id="amazon-copy-active-btn" type="button">
                   <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
@@ -85,34 +86,34 @@
                 </button>
                 <button class="soft-button" id="amazon-refresh-btn" type="button">
                   <svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg>
-                  <span>تحديث أمازون</span>
+                  <span>تحديث البيانات</span>
                 </button>
               </div>
             </div>
             <div class="amazon-hero-stats">
-              <div class="amazon-stat-tile"><span>حسابات أمازون</span><strong id="amazon-stat-inboxes">0</strong></div>
-              <div class="amazon-stat-tile"><span>رسائل أمازون</span><strong id="amazon-stat-messages">0</strong></div>
-              <div class="amazon-stat-tile highlight-gold"><span>أكواد التحقق</span><strong id="amazon-stat-otps">0</strong></div>
-              <div class="amazon-stat-tile highlight-amber"><span>اشتباه حظر</span><strong id="amazon-stat-suspected">0</strong></div>
-              <div class="amazon-stat-tile highlight-red"><span>محظورة / مقيدة</span><strong id="amazon-stat-banned">0</strong></div>
+              <button class="amazon-stat-tile" type="button" data-amazon-view="accounts" data-account-filter="all"><span>كل الحسابات</span><strong id="amazon-stat-inboxes">0</strong><small>عرض الكل</small></button>
+              <button class="amazon-stat-tile highlight-green" type="button" data-amazon-view="accounts" data-account-filter="healthy"><span>حسابات سليمة</span><strong id="amazon-stat-healthy">0</strong><small>لا توجد قيود</small></button>
+              <button class="amazon-stat-tile highlight-amber" type="button" data-amazon-view="accounts" data-account-filter="suspected"><span>تحتاج مراجعة</span><strong id="amazon-stat-suspected">0</strong><small>قرارك مطلوب</small></button>
+              <button class="amazon-stat-tile highlight-red" type="button" data-amazon-view="accounts" data-account-filter="banned"><span>محظورة / مقيدة</span><strong id="amazon-stat-banned">0</strong><small>حالات مؤكدة</small></button>
             </div>
           </div>
 
           <div class="amazon-feed-container">
             <div class="amazon-filters-bar">
-              <div class="amazon-sub-tabs" id="amazon-sub-tabs">
-                <button class="active" data-amazon-filter="all"><span>كل رسائل أمازون</span><b id="amz-tab-all-count">0</b></button>
-                <button data-amazon-filter="otp"><span class="tab-emoji">⚡</span><span>أكواد التحقق (OTP)</span><b id="amz-tab-otp-count">0</b></button>
-                <button data-amazon-filter="suspected"><span class="tab-emoji">⚠️</span><span>اشتباه حظر</span><b id="amz-tab-suspected-count">0</b></button>
-                <button data-amazon-filter="banned"><span class="tab-emoji">⛔</span><span>المحظور والمقيد</span><b id="amz-tab-banned-count">0</b></button>
-                <button data-amazon-filter="orders"><span class="tab-emoji">📦</span><span>الطلبات والشحنات</span><b id="amz-tab-orders-count">0</b></button>
+              <div class="amazon-sub-tabs amazon-view-tabs" id="amazon-sub-tabs" role="tablist" aria-label="أقسام مركز أمازون">
+                <button class="active" type="button" role="tab" aria-selected="true" data-amazon-view="accounts" data-account-filter="all"><span>الحسابات</span><b id="amz-tab-all-count">0</b></button>
+                <button type="button" role="tab" aria-selected="false" data-amazon-view="messages" data-amazon-filter="all"><span>الرسائل</span><b id="amazon-stat-messages">0</b></button>
+                <button type="button" role="tab" aria-selected="false" data-amazon-view="messages" data-amazon-filter="otp"><span>رموز OTP</span><b id="amz-tab-otp-count">0</b></button>
+                <button type="button" role="tab" aria-selected="false" data-amazon-view="messages" data-amazon-filter="orders"><span>الطلبات والشحن</span><b id="amz-tab-orders-count">0</b></button>
               </div>
-              <label class="search-box compact"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="amazon-search" type="search" placeholder="بحث في رسائل أمازون…"></label>
+              <label class="search-box compact"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="amazon-search" type="search" placeholder="ابحث باسم الحساب أو البريد…" autocomplete="off"></label>
             </div>
 
-            <div class="amazon-inboxes-reel" id="amazon-inboxes-reel"></div>
+            <div class="amazon-results-heading"><div><span id="amazon-results-kicker">إدارة الحسابات</span><h3 id="amazon-results-title">كل حسابات أمازون</h3></div><span id="amazon-results-count" aria-live="polite">0 حساب</span></div>
 
-            <div class="message-list amazon-message-stream" id="amazon-message-list">
+            <div class="amazon-inboxes-reel amazon-account-grid" id="amazon-inboxes-reel"></div>
+
+            <div class="message-list amazon-message-stream hidden" id="amazon-message-list">
               <div class="skeleton-list wide"></div>
             </div>
           </div>
@@ -232,6 +233,6 @@
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=15" defer></script>
+  <script src="/app.js?v=18" defer></script>
 </body>
 </html>

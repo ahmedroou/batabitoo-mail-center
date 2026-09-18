@@ -1,10 +1,9 @@
-const CACHE_NAME = 'batabitoo-mail-v10';
+const CACHE_NAME = 'batabitoo-mail-v8';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/styles.css',
   '/reader.css',
-  '/amazon.css',
   '/app.js',
   '/mail-scene.js',
   '/vendor/three.module.min.js',
