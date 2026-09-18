@@ -117,6 +117,25 @@ function placeHero() {
   document.dispatchEvent(new Event('mail-layout-change'));
 }
 
+function returnToMainInbox() {
+  if (state.currentMessage) closeReader(false);
+  if (history.state?.screen === 'amazon') {
+    history.back();
+  } else {
+    switchContentView('current');
+  }
+  if (mobileLayout.matches) {
+    if (!state.activeId) {
+      document.querySelector('.workspace')?.classList.remove('show-content');
+      document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'inboxes'));
+    } else {
+      document.querySelector('.workspace')?.classList.add('show-content');
+      document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'messages'));
+    }
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 const $ = id => document.getElementById(id);
 
 document.addEventListener('DOMContentLoaded', init);
@@ -129,6 +148,18 @@ async function init() {
   document.querySelector('.brand-copy > span').textContent = hour < 12 ? 'صباح الخير 👋' : 'مساء الخير 👋';
   updateActiveInbox();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+  // Check Google OAuth URL parameters
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('gmail_connected')) {
+    const linkedEmail = urlParams.get('email') || 'Gmail';
+    toast(`تم ربط حساب Google (${linkedEmail}) بنجاح ومزامنة الرسائل جارية! 🟢`);
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } else if (urlParams.get('gmail_error')) {
+    toast(`تعذر ربط حساب Google: ${urlParams.get('gmail_error')}`, 'error');
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
   await refreshEverything();
   setInterval(() => {
     if (!document.hidden && state.view === 'current' && !state.currentMessage) loadCurrent(true);
@@ -231,9 +262,35 @@ function bindEvents() {
     if (message) openMessage(decodeURIComponent(message.dataset.messageId));
   });
 
+  // Brand & Return Navigation
+  $('brand-home-btn')?.addEventListener('click', returnToMainInbox);
+  $('amazon-back-btn')?.addEventListener('click', returnToMainInbox);
+  $('amazon-crumb-home')?.addEventListener('click', returnToMainInbox);
+  $('amazon-hero-back-btn')?.addEventListener('click', returnToMainInbox);
+
   // Dedicated Amazon Hub Event Listeners
-  $('open-amazon-hub-btn')?.addEventListener('click', () => switchContentView('amazon'));
-  $('stat-amazon-card')?.addEventListener('click', () => switchContentView('amazon'));
+  $('open-amazon-hub-btn')?.addEventListener('click', () => {
+    if (state.view === 'amazon') returnToMainInbox();
+    else switchContentView('amazon');
+  });
+
+  // Stats Strip Card Navigation
+  $('stat-all-card')?.addEventListener('click', returnToMainInbox);
+  $('stat-messages-card')?.addEventListener('click', () => {
+    if (state.currentMessage) closeReader(false);
+    switchContentView('current');
+    if (mobileLayout.matches) {
+      document.querySelector('.workspace')?.classList.add('show-content');
+      document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item.dataset.mobileView === 'messages'));
+    }
+  });
+  $('stat-official-card')?.addEventListener('click', () => switchContentView('official'));
+  $('stat-temp-card')?.addEventListener('click', () => switchContentView('temp'));
+  $('stat-banned-card')?.addEventListener('click', () => switchContentView('banned'));
+  $('stat-amazon-card')?.addEventListener('click', () => {
+    if (state.view === 'amazon') returnToMainInbox();
+    else switchContentView('amazon');
+  });
   $('amazon-quick-create-btn')?.addEventListener('click', createQuickAmazonInbox);
   $('amazon-copy-active-btn')?.addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد النشط'));
   $('amazon-refresh-btn')?.addEventListener('click', refreshAmazonHub);
@@ -344,33 +401,195 @@ function bindEvents() {
   });
 
   window.addEventListener('popstate', event => {
-    if (event.state?.screen === 'reader') openMessage(event.state.messageId, false);
-    else if (state.currentMessage) closeReader(false);
+    if (event.state?.screen === 'reader') {
+      openMessage(event.state.messageId, false);
+    } else if (state.currentMessage) {
+      closeReader(false);
+    } else if (event.state?.screen === 'amazon') {
+      switchContentView('amazon', false);
+    } else if (state.view === 'amazon') {
+      switchContentView('current', false);
+    }
   });
 
   document.querySelectorAll('[data-close-modal]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.closeModal)));
   document.querySelectorAll('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => {
     if (event.target === backdrop) backdrop.classList.add('hidden');
   }));
+
   $('create-type').addEventListener('click', event => {
     const button = event.target.closest('[data-create-type]');
     if (!button) return;
     state.createType = button.dataset.createType;
     document.querySelectorAll('[data-create-type]').forEach(item => item.classList.toggle('active', item === button));
+
+    const standardForm = $('create-form');
+    const gmailSection = $('gmail-connect-section');
+    const seqBtn = $('seq-official-btn');
+    const modalTitle = $('modal-title');
+    const modalDesc = $('modal-desc');
+
     if (state.createType === 'official') {
+      if (modalTitle) modalTitle.textContent = 'صندوق بريد رسمي جديد';
+      if (modalDesc) modalDesc.textContent = 'أنشئ صندوقاً رسمياً على نطاق @batabitoo.com.';
+      standardForm?.classList.remove('hidden');
+      gmailSection?.classList.add('hidden');
+      seqBtn?.classList.remove('hidden');
       $('prefix-suffix').textContent = '@batabitoo.com';
-      $('seq-official-btn')?.classList.remove('hidden');
       if ($('create-prefix-help')) $('create-prefix-help').textContent = 'الأحرف الإنجليزية والأرقام والنقطة فقط.';
     } else if (state.createType === 'gmail') {
-      $('prefix-suffix').textContent = '@gmail.com';
-      $('seq-official-btn')?.classList.add('hidden');
-      if ($('create-prefix-help')) $('create-prefix-help').textContent = 'أدخل اسم المستخدم أو بريد Gmail كاملاً.';
+      if (modalTitle) modalTitle.textContent = 'ربط ومزامنة حساب Gmail فعلي';
+      if (modalDesc) modalDesc.textContent = 'اربط حساب Google حقيقي لجلب الرسائل ورموز OTP تلقائياً.';
+      standardForm?.classList.add('hidden');
+      gmailSection?.classList.remove('hidden');
+      seqBtn?.classList.add('hidden');
     } else {
+      if (modalTitle) modalTitle.textContent = 'صندوق بريد سريع';
+      if (modalDesc) modalDesc.textContent = 'صندوق مؤقت جاهز بلحظات لأغراض التسجيل المؤقت.';
+      standardForm?.classList.remove('hidden');
+      gmailSection?.classList.add('hidden');
+      seqBtn?.classList.add('hidden');
       $('prefix-suffix').textContent = '@نطاق سريع';
-      $('seq-official-btn')?.classList.add('hidden');
       if ($('create-prefix-help')) $('create-prefix-help').textContent = 'جاهز بلحظات - سيُختار نطاق سريع تلقائيًا.';
     }
   });
+
+  // Gmail Sub-method Tabs (App Password vs OAuth)
+  $('gmail-method-tabs')?.addEventListener('click', event => {
+    const tabBtn = event.target.closest('[data-gmail-method]');
+    if (!tabBtn) return;
+    const method = tabBtn.dataset.gmailMethod;
+    document.querySelectorAll('[data-gmail-method]').forEach(b => b.classList.toggle('active', b === tabBtn));
+    if (method === 'app_password') {
+      $('gmail-app-form')?.classList.remove('hidden');
+      $('gmail-oauth-panel')?.classList.add('hidden');
+    } else {
+      $('gmail-app-form')?.classList.add('hidden');
+      $('gmail-oauth-panel')?.classList.remove('hidden');
+    }
+  });
+
+  // Handle Real Gmail App Password Submission
+  $('gmail-app-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('gmail-app-name')?.value.trim();
+    const email = $('gmail-app-email')?.value.trim();
+    const appPassword = $('gmail-app-password')?.value.trim();
+
+    if (!email || !email.endsWith('@gmail.com')) {
+      toast('يرجى كتابة عنوان بريد Gmail صالح (@gmail.com)', 'error');
+      return;
+    }
+    if (!appPassword || appPassword.replace(/\s+/g, '').length < 16) {
+      toast('كلمة مرور التطبيقات يجب أن تتكون من 16 حرفاً من Google', 'error');
+      return;
+    }
+
+    const submitBtn = $('gmail-app-submit');
+    setBusy(submitBtn, true, 'جاري التحقق والربط بسيرفرات Google...');
+    try {
+      let result = null;
+      try {
+        const res = await fetch('/api/gmail/connect-app-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, appPassword, personName: name })
+        });
+        result = await res.json();
+      } catch (netErr) {
+        try {
+          const directRes = await fetch('http://localhost:3030/api/gmail/connect-app-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, appPassword, personName: name })
+          });
+          result = await directRes.json();
+        } catch (e2) {
+          throw new Error('تعذر الاتصال بخادم المزامنة الخلفي. يرجى التأكد من تشغيل الخادم.');
+        }
+      }
+
+      if (!result || !result.success) {
+        throw new Error(result?.error || 'تعذر ربط حساب Gmail. تأكد من كلمة مرور التطبيقات.');
+      }
+
+      // Sync record to Firestore
+      const cleanEmail = email.toLowerCase().trim();
+      const docId = `gmail_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+      const firestoreFields = {
+        id: { stringValue: docId },
+        email: { stringValue: cleanEmail },
+        domain: { stringValue: 'gmail.com' },
+        host: { stringValue: 'Gmail (Google Official Real)' },
+        isOfficial: { booleanValue: true },
+        isAmazon: { booleanValue: false },
+        isBanned: { booleanValue: false },
+        banStatus: { stringValue: 'none' },
+        banReason: { stringValue: '' },
+        type: { stringValue: 'official' },
+        label: { stringValue: name || cleanEmail.split('@')[0] },
+        personName: { stringValue: name || cleanEmail.split('@')[0] },
+        isRealGmail: { booleanValue: true },
+        gmailAuthType: { stringValue: 'app_password' },
+        createdAt: { stringValue: new Date().toISOString() },
+        messageCount: { integerValue: "0" }
+      };
+      await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: firestoreFields })
+      }).catch(() => {});
+
+      closeModal('create');
+      toast(`تم ربط ${cleanEmail} بنجاح ومزامنة الرسائل الواردة جارية! 🟢`);
+      state.activeInbox = cleanEmail;
+      await fetchInboxes();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(submitBtn, false, 'ربط واختبار الاتصال فوراً');
+    }
+  });
+
+  // Handle Google OAuth
+  $('start-google-oauth-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/gmail/oauth/auth-url');
+      const data = await res.json();
+      if (data.success && data.authUrl) {
+        window.location.href = data.authUrl;
+      } else {
+        toast(data.error || 'يرجى حفظ Google Client ID أولاً من الخيارات المتقدمة بالأسفل.', 'error');
+        $('oauth-custom-settings')?.classList.remove('hidden');
+      }
+    } catch (e) {
+      toast('تعذر جلب رابط مصادقة Google: ' + e.message, 'error');
+    }
+  });
+
+  $('toggle-oauth-settings-btn')?.addEventListener('click', () => {
+    $('oauth-custom-settings')?.classList.toggle('hidden');
+  });
+
+  $('save-oauth-settings-btn')?.addEventListener('click', async () => {
+    const clientId = $('oauth-client-id-input')?.value.trim();
+    const clientSecret = $('oauth-client-secret-input')?.value.trim();
+    if (!clientId) {
+      toast('يرجى إدخال Client ID', 'error');
+      return;
+    }
+    try {
+      await fetch('/api/gmail/oauth/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId, clientSecret })
+      });
+      toast('تم حفظ إعدادات Google OAuth بنجاح!');
+    } catch (e) {
+      toast('تعذر حفظ الإعدادات: ' + e.message, 'error');
+    }
+  });
+
   $('seq-official-btn').addEventListener('click', () => {
     const next = getNextSequentialPrefix('ahmedroou');
     state.createType = 'official';
@@ -398,13 +617,14 @@ function bindEvents() {
     document.querySelectorAll('[data-mobile-view]').forEach(item => item.classList.toggle('active', item === button));
     if (target === 'inboxes') {
       document.querySelector('.workspace').classList.remove('show-content');
+      if (state.view === 'amazon') switchContentView('current', false);
     } else if (target === 'amazon') {
       document.querySelector('.workspace').classList.add('show-content');
       switchContentView('amazon');
     } else {
       document.querySelector('.workspace').classList.add('show-content');
       if (target === 'logs') switchContentView('logs');
-      else if (state.view === 'logs' || state.view === 'amazon') switchContentView('current');
+      else switchContentView('current');
     }
     placeHero();
   });
@@ -417,6 +637,10 @@ function bindEvents() {
     if (event.key === 'Escape') {
       if (state.currentMessage) {
         closeReader();
+        return;
+      }
+      if (state.view === 'amazon') {
+        returnToMainInbox();
         return;
       }
       document.querySelectorAll('.modal-backdrop').forEach(item => item.classList.add('hidden'));
@@ -989,6 +1213,7 @@ function renderInboxes() {
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           <strong>${html(label)}</strong>
           ${unread ? '<span class="unread-pill" title="رسائل جديدة غير مقروءة">جديد</span>' : ''}
+          ${(inbox.isRealGmail || inbox.domain === 'gmail.com') ? '<span class="real-gmail-badge" title="حساب Gmail حقيقي بمزامنة حية 24/7">📧 Gmail</span>' : ''}
           ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : suspected ? `<span class="suspected-badge" title="${attr(reason)}">⚠️ اشتباه حظر</span>` : ''}
         </div>
         <span>${html(inbox.email || '')}</span>
@@ -1061,12 +1286,33 @@ async function selectInbox(id) {
   }
 }
 
-function switchContentView(view) {
+function switchContentView(view, pushHistory = true) {
   if (state.currentMessage) closeReader(false);
+  const previousView = state.view;
   state.view = view;
   placeHero();
   $('content-search').value = '';
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+
+  // Sync Topbar Amazon Hub Pill active state
+  $('open-amazon-hub-btn')?.classList.toggle('active', view === 'amazon');
+
+  // Sync Mobile Nav buttons
+  document.querySelectorAll('[data-mobile-view]').forEach(item => {
+    if (view === 'amazon') item.classList.toggle('active', item.dataset.mobileView === 'amazon');
+    else if (view === 'logs') item.classList.toggle('active', item.dataset.mobileView === 'logs');
+    else if (view === 'current') {
+      const showContent = document.querySelector('.workspace')?.classList.contains('show-content');
+      item.classList.toggle('active', showContent ? item.dataset.mobileView === 'messages' : item.dataset.mobileView === 'inboxes');
+    }
+  });
+
+  // History state management
+  if (pushHistory) {
+    if (view === 'amazon' && previousView !== 'amazon') {
+      history.pushState({ screen: 'amazon' }, '');
+    }
+  }
 
   if (view === 'amazon') {
     $('feed-shell')?.classList.add('hidden');

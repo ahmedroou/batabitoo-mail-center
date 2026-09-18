@@ -5,6 +5,7 @@ const RealInboxService = require('./RealInboxService');
 const db = require('./InboxDatabase');
 const emailParser = require('./EmailParser');
 const content = require('./MailContent');
+const gmailSync = require('./GmailSyncService');
 
 const PORT = Number(process.env.PORT || 3030);
 const service = new RealInboxService();
@@ -49,7 +50,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('⚠️ [Guarded] Unhandled Rejection:', reason);
 });
 
-const ready = cleanupExistingMessages();
+const ready = cleanupExistingMessages().then(() => {
+  gmailSync.startAll();
+});
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -268,6 +271,131 @@ const server = http.createServer(async (req, res) => {
       });
 
       return sendJSON(200, { success: true, inbox: record });
+    }
+
+    // ============================================================
+    // 2.1 REAL GMAIL LIVE SYNC & CONNECTION ENDPOINTS
+    // ============================================================
+    if (url.pathname === '/api/gmail/connect-app-password' && req.method === 'POST') {
+      const payload = await parseBody();
+      try {
+        const result = await gmailSync.connectAppPassword(payload);
+        return sendJSON(200, result);
+      } catch (err) {
+        return sendJSON(400, { success: false, error: err.message });
+      }
+    }
+
+    if (url.pathname === '/api/gmail/accounts' && req.method === 'GET') {
+      const accounts = gmailSync.getAccounts();
+      return sendJSON(200, { success: true, accounts });
+    }
+
+    if (url.pathname === '/api/gmail/sync' && req.method === 'POST') {
+      const payload = await parseBody();
+      try {
+        const result = await gmailSync.syncAccount(payload.email);
+        return sendJSON(200, result);
+      } catch (err) {
+        return sendJSON(400, { success: false, error: err.message });
+      }
+    }
+
+    if (url.pathname === '/api/gmail/disconnect' && req.method === 'POST') {
+      const payload = await parseBody();
+      try {
+        const result = await gmailSync.disconnect(payload.email);
+        return sendJSON(200, result);
+      } catch (err) {
+        return sendJSON(400, { success: false, error: err.message });
+      }
+    }
+
+    if (url.pathname === '/api/gmail/oauth/auth-url' && req.method === 'GET') {
+      const config = gmailSync.getOAuthConfig();
+      const clientId = config.clientId || url.searchParams.get('client_id');
+      if (!clientId) {
+        return sendJSON(400, { success: false, error: 'Google OAuth Client ID غير مهيأ بعد.' });
+      }
+      const host = req.headers.host;
+      const protocol = req.headers['x-forwarded-proto'] || 'http';
+      const redirectUri = config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent`;
+      return sendJSON(200, { success: true, authUrl, redirectUri });
+    }
+
+    if (url.pathname === '/api/gmail/oauth/callback' && req.method === 'GET') {
+      const code = url.searchParams.get('code');
+      const errParam = url.searchParams.get('error');
+      if (errParam) {
+        res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(errParam)}` });
+        res.end();
+        return;
+      }
+      try {
+        const config = gmailSync.getOAuthConfig();
+        const host = req.headers.host;
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const redirectUri = config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
+
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            code,
+            client_id: config.clientId,
+            client_secret: config.clientSecret,
+            redirect_uri: redirectUri,
+            grant_type: 'authorization_code'
+          })
+        });
+        const tokenData = await tokenRes.json();
+        if (!tokenData.access_token) {
+          res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(tokenData.error_description || 'فشل الحصول على تصريح جوجل')}` });
+          res.end();
+          return;
+        }
+
+        const userRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}` }
+        });
+        const userData = await userRes.json();
+        const userEmail = userData.emailAddress;
+
+        await gmailSync.connectOAuth({
+          email: userEmail,
+          refreshToken: tokenData.refresh_token,
+          accessToken: tokenData.access_token,
+          personName: userEmail.split('@')[0]
+        });
+
+        res.writeHead(302, { Location: `/?gmail_connected=1&email=${encodeURIComponent(userEmail)}` });
+        res.end();
+        return;
+      } catch (e) {
+        res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(e.message)}` });
+        res.end();
+        return;
+      }
+    }
+
+    if (url.pathname === '/api/gmail/oauth/config' && req.method === 'GET') {
+      const conf = gmailSync.getOAuthConfig();
+      return sendJSON(200, {
+        clientId: conf.clientId,
+        hasSecret: Boolean(conf.clientSecret),
+        redirectUri: conf.redirectUri
+      });
+    }
+
+    if (url.pathname === '/api/gmail/oauth/config' && req.method === 'POST') {
+      const payload = await parseBody();
+      gmailSync.saveOAuthConfig({
+        clientId: payload.clientId || '',
+        clientSecret: payload.clientSecret || '',
+        redirectUri: payload.redirectUri || ''
+      });
+      return sendJSON(200, { success: true });
     }
 
     // ============================================================
