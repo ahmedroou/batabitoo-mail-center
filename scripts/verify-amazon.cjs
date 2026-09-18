@@ -63,8 +63,19 @@ const messages = Array.from({length: 320}, (_, i) => ({
       await page.waitForFunction(()=>document.querySelectorAll('.amazon-account-card').length===1);
       await page.locator('#amazon-search').fill('');
       if (width===390) {
-        await page.evaluate(()=>updateBanStatus('account-7','confirmed','اختبار'));
+        const persisted=await page.evaluate(()=>updateBanStatus('account-7','confirmed','اختبار'));
+        assert.equal(persisted,true);
         assert.equal(firestoreWrites,1,'404 status endpoint must fall back to Firestore once');
+        const transition=await page.evaluate(()=>({
+          suspected:state.suspected.some(item=>item.id==='account-7'),
+          banned:state.banned.some(item=>item.id==='account-7'),
+          official:state.official.find(item=>item.id==='account-7')?.banStatus
+        }));
+        assert.deepEqual(transition,{suspected:false,banned:true,official:'confirmed'});
+        await page.evaluate(()=>loadInboxes());
+        assert.equal(await page.evaluate(()=>state.official.find(item=>item.id==='account-7')?.banStatus),'confirmed','manual decision must survive stale sync data');
+        await page.evaluate(()=>setAmazonView('accounts','suspected'));
+        assert.equal(await page.locator('.amazon-account-card[data-account-id="account-7"]').count(),0);
       }
       await page.screenshot({path:path.resolve(`amazon-accounts-${width}.png`),fullPage:true});
       assert.deepEqual(errors,[]);

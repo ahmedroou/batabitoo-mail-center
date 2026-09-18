@@ -129,6 +129,14 @@ svg {
   display: flex;
   align-items: center;
   gap: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.brand:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
 }
 
 .brand-mark {
@@ -224,6 +232,18 @@ svg {
   box-shadow: 0 4px 12px rgba(234, 88, 12, 0.18);
 }
 
+.amazon-hub-pill.active {
+  background: linear-gradient(135deg, #ea580c, #c2410c);
+  border-color: #9a3412;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);
+}
+
+.amazon-hub-pill.active b {
+  background: #ffffff;
+  color: #c2410c;
+}
+
 .amazon-hub-pill .hub-icon {
   font-size: 14px;
 }
@@ -309,11 +329,14 @@ svg {
 
 .stat-card.stat-clickable {
   cursor: pointer;
+  user-select: none;
 }
 
 .stat-card.stat-clickable:hover {
-  border-color: #fdba74;
-  background: #fffdfb;
+  border-color: var(--primary);
+  background: #f8faff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.12);
 }
 
 .stat-card:hover {
@@ -2100,7 +2123,7 @@ svg {
    ============================================================= */
 .modal-backdrop {
   position: fixed;
-  z-index: 100;
+  z-index: 2000;
   inset: 0;
   display: flex;
   align-items: center;
@@ -2148,13 +2171,13 @@ svg {
 
 .type-picker {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
   margin-bottom: 16px;
 }
 
 .type-picker button {
-  padding: 12px;
+  padding: 10px 6px;
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
   background: var(--canvas);
@@ -2166,6 +2189,18 @@ svg {
   background: var(--primary-light);
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.type-picker button.official-choice.active {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
+
+.type-picker button.gmail-choice.active {
+  background: #fef2f2;
+  border-color: #ea4335;
+  box-shadow: 0 0 0 2px rgba(234, 67, 53, 0.25);
 }
 
 .choice-icon {

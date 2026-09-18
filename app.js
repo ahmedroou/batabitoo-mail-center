@@ -7,17 +7,32 @@ let readerReturnScroll = 0;
 let readerReturnFocus;
 
 const SEEN_KEY = 'batabitoo_seen_inbox_counts';
+const BAN_DECISIONS_KEY = 'batabitoo_manual_ban_decisions_v1';
 let seenCounts = {};
+let manualBanDecisions = {};
 try {
   seenCounts = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+  manualBanDecisions = JSON.parse(localStorage.getItem(BAN_DECISIONS_KEY) || '{}');
 } catch (e) {
   seenCounts = {};
+  manualBanDecisions = {};
 }
 
 function saveSeenCounts() {
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(seenCounts));
   } catch (e) {}
+}
+
+function saveManualBanDecision(id, email, status, reason) {
+  const decision = { status, reason: reason || '', updatedAt: new Date().toISOString() };
+  if (id) manualBanDecisions[`id:${id}`] = decision;
+  if (email) manualBanDecisions[`email:${email.toLowerCase()}`] = decision;
+  try { localStorage.setItem(BAN_DECISIONS_KEY, JSON.stringify(manualBanDecisions)); } catch (e) {}
+}
+
+function getManualBanDecision(inbox) {
+  return manualBanDecisions[`id:${inbox?.id}`] || manualBanDecisions[`email:${String(inbox?.email || '').toLowerCase()}`] || null;
 }
 
 function isInboxUnread(inbox) {
@@ -63,6 +78,8 @@ const state = {
   inboxType: 'official',
   view: 'current',
   createType: 'official',
+  amazonView: 'accounts',
+  amazonAccountFilter: 'all',
   amazonSubFilter: 'all',
   amazonSelectedInbox: null,
   activeMessageList: [],
@@ -82,6 +99,8 @@ const state = {
   loading: false
 };
 let inboxLimit = 40;
+let amazonAccountLimit = 24;
+let amazonMessageLimit = 20;
 const mobileLayout = matchMedia('(max-width: 720px)');
 function placeHero() {
   const hero = document.querySelector('.active-inbox-bar');
@@ -218,28 +237,51 @@ function bindEvents() {
   $('amazon-quick-create-btn')?.addEventListener('click', createQuickAmazonInbox);
   $('amazon-copy-active-btn')?.addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد النشط'));
   $('amazon-refresh-btn')?.addEventListener('click', refreshAmazonHub);
-  $('amazon-search')?.addEventListener('input', renderAmazonMessages);
+  $('amazon-search')?.addEventListener('input', () => {
+    amazonAccountLimit = 24;
+    amazonMessageLimit = 20;
+    renderAmazonHub();
+  });
   $('amazon-sub-tabs')?.addEventListener('click', event => {
-    const btn = event.target.closest('[data-amazon-filter]');
+    const btn = event.target.closest('[data-amazon-view]');
     if (!btn) return;
-    state.amazonSubFilter = btn.dataset.amazonFilter;
-    document.querySelectorAll('[data-amazon-filter]').forEach(b => b.classList.toggle('active', b === btn));
-    renderAmazonMessages();
+    setAmazonView(btn.dataset.amazonView, btn.dataset.accountFilter || btn.dataset.amazonFilter || 'all');
+  });
+  $('amazon-hub-shell')?.addEventListener('click', event => {
+    const stat = event.target.closest('.amazon-stat-tile[data-amazon-view]');
+    if (stat) setAmazonView(stat.dataset.amazonView, stat.dataset.accountFilter || 'all');
   });
   $('amazon-inboxes-reel')?.addEventListener('click', event => {
-    const addBtn = event.target.closest('#reel-quick-add');
-    if (addBtn) {
+    if (event.target.closest('#reel-quick-add')) {
       createQuickAmazonInbox();
       return;
     }
-    const item = event.target.closest('[data-reel-inbox]');
-    if (!item) return;
-    const target = item.dataset.reelInbox;
-    state.amazonSelectedInbox = target === 'all' ? null : target;
-    renderAmazonInboxesReel();
-    renderAmazonMessages();
+    if (event.target.closest('[data-amazon-load-more]')) {
+      amazonAccountLimit += 24;
+      renderAmazonInboxesReel();
+      return;
+    }
+    const copy = event.target.closest('[data-amazon-copy]');
+    if (copy) { copyText(decodeURIComponent(copy.dataset.amazonCopy), 'تم نسخ عنوان البريد'); return; }
+    const messages = event.target.closest('[data-amazon-messages]');
+    if (messages) {
+      state.amazonSelectedInbox = decodeURIComponent(messages.dataset.amazonMessages);
+      setAmazonView('messages', 'all');
+      return;
+    }
+    const confirm = event.target.closest('[data-confirm-ban]');
+    if (confirm) { updateBanStatus(confirm.dataset.confirmBan, 'confirmed', confirm.dataset.reason || ''); return; }
+    const safe = event.target.closest('[data-mark-safe]');
+    if (safe) { updateBanStatus(safe.dataset.markSafe, 'safe'); return; }
+    const ai = event.target.closest('[data-ai-verify]');
+    if (ai) triggerAiVerify(ai);
   });
   $('amazon-message-list')?.addEventListener('click', event => {
+    if (event.target.closest('[data-amazon-messages-more]')) {
+      amazonMessageLimit += 20;
+      renderAmazonMessages();
+      return;
+    }
     const openMsgBtn = event.target.closest('[data-open-message]');
     if (openMsgBtn) {
       event.stopPropagation();
@@ -315,7 +357,19 @@ function bindEvents() {
     if (!button) return;
     state.createType = button.dataset.createType;
     document.querySelectorAll('[data-create-type]').forEach(item => item.classList.toggle('active', item === button));
-    $('prefix-suffix').textContent = state.createType === 'official' ? '@batabitoo.com' : '@نطاق سريع';
+    if (state.createType === 'official') {
+      $('prefix-suffix').textContent = '@batabitoo.com';
+      $('seq-official-btn')?.classList.remove('hidden');
+      if ($('create-prefix-help')) $('create-prefix-help').textContent = 'الأحرف الإنجليزية والأرقام والنقطة فقط.';
+    } else if (state.createType === 'gmail') {
+      $('prefix-suffix').textContent = '@gmail.com';
+      $('seq-official-btn')?.classList.add('hidden');
+      if ($('create-prefix-help')) $('create-prefix-help').textContent = 'أدخل اسم المستخدم أو بريد Gmail كاملاً.';
+    } else {
+      $('prefix-suffix').textContent = '@نطاق سريع';
+      $('seq-official-btn')?.classList.add('hidden');
+      if ($('create-prefix-help')) $('create-prefix-help').textContent = 'جاهز بلحظات - سيُختار نطاق سريع تلقائيًا.';
+    }
   });
   $('seq-official-btn').addEventListener('click', () => {
     const next = getNextSequentialPrefix('ahmedroou');
@@ -405,7 +459,7 @@ async function fetchFirestoreInboxes() {
   const data = await res.json();
   const docs = data.documents || [];
   const allList = docs.map(parseFirestoreDoc).filter(i => i.email);
-  const official = allList.filter(i => i.isOfficial || i.type === 'official' || (i.email && i.email.endsWith('@batabitoo.com')));
+  const official = allList.filter(i => i.isOfficial || i.type === 'official' || (i.email && (i.email.endsWith('@batabitoo.com') || i.email.endsWith('@gmail.com'))));
   const temp = allList.filter(i => !official.includes(i));
   const banned = allList.filter(i => (i.banStatus === 'confirmed' || i.isBanned) && (i.isOfficial || i.type === 'official'));
   const suspected = allList.filter(i => i.banStatus === 'suspected' && (i.isOfficial || i.type === 'official'));
@@ -426,7 +480,7 @@ async function fetchFirestoreMessages(type = null) {
   const data = await res.json();
   const docs = data.documents || [];
   const msgList = docs.map(parseFirestoreDoc).filter(m => m.id);
-  const official = msgList.filter(m => m.isOfficialDomain || (m.inboxEmail || m.to || '').endsWith('@batabitoo.com'));
+  const official = msgList.filter(m => m.isOfficialDomain || (m.inboxEmail || m.to || '').endsWith('@batabitoo.com') || (m.inboxEmail || m.to || '').endsWith('@gmail.com'));
   const temp = msgList.filter(m => !official.includes(m));
   const banned = msgList.filter(m => m.isBanned);
   const amazon = msgList.filter(m => m.isAmazon || m.isBanned);
@@ -491,6 +545,53 @@ async function api(path, options = {}) {
           }
         };
       }
+      if (path.startsWith('/api/official/create') && options.body) {
+        const bodyObj = JSON.parse(options.body);
+        const reqDom = (bodyObj.domain || 'batabitoo.com').toLowerCase();
+        const effectiveDomain = reqDom.includes('gmail') ? 'gmail.com' : 'batabitoo.com';
+        const rawPrefix = (bodyObj.prefix || bodyObj.email || 'amazon.acc').toLowerCase().trim();
+        let email = rawPrefix.includes('@') ? rawPrefix : `${rawPrefix.replace(/[^a-z0-9\.]/g, '') || 'amazon.acc'}@${effectiveDomain}`;
+        const cleanName = bodyObj.personName || bodyObj.label || `حساب رسمي (${email.split('@')[0]})`;
+        const docId = `official_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const record = {
+          id: docId,
+          email: email,
+          domain: effectiveDomain,
+          host: effectiveDomain === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)',
+          isOfficial: true,
+          isAmazon: false,
+          isBanned: false,
+          banStatus: 'none',
+          banReason: '',
+          type: 'official',
+          label: cleanName,
+          personName: cleanName,
+          createdAt: new Date().toISOString(),
+          messageCount: 0
+        };
+        const firestoreFields = {
+          id: { stringValue: docId },
+          email: { stringValue: email },
+          domain: { stringValue: effectiveDomain },
+          host: { stringValue: record.host },
+          isOfficial: { booleanValue: true },
+          isAmazon: { booleanValue: false },
+          isBanned: { booleanValue: false },
+          banStatus: { stringValue: 'none' },
+          banReason: { stringValue: '' },
+          type: { stringValue: 'official' },
+          label: { stringValue: cleanName },
+          personName: { stringValue: cleanName },
+          createdAt: { stringValue: record.createdAt },
+          messageCount: { integerValue: "0" }
+        };
+        const fsRes = await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: firestoreFields })
+        });
+        if (fsRes.ok) return { success: true, inbox: record };
+      }
       if (path.startsWith('/api/nivea/logs')) {
         return [];
       }
@@ -535,42 +636,99 @@ async function loadStatus() {
   setConnection(true, data.cloudConnected);
 }
 
-async function updateBanStatus(id, banStatus, reason = '') {
+async function updateBanStatus(targetIdOrEmail, banStatus, reason = '') {
+  const inbox = findInboxById(targetIdOrEmail);
+  const targetId = inbox?.id || targetIdOrEmail;
+  const email = inbox?.email || (targetIdOrEmail.includes('@') ? targetIdOrEmail : '');
+
+  const isConfirmed = banStatus === 'confirmed';
+  const effectiveReason = reason || inbox?.banReason || (isConfirmed ? 'إغلاق وتأكيد الحظر' : '');
+
+  const updateInboxObj = (item) => {
+    if ((item.id && item.id === targetId) || (item.email && item.email.toLowerCase() === email.toLowerCase())) {
+      return {
+        ...item,
+        banStatus: banStatus,
+        isBanned: isConfirmed,
+        isAmazon: isConfirmed ? true : item.isAmazon,
+        banReason: effectiveReason
+      };
+    }
+    return item;
+  };
+
+  state.official = state.official.map(updateInboxObj);
+  state.temp = state.temp.map(updateInboxObj);
+  state.amazon = state.amazon.map(updateInboxObj);
+  if (isConfirmed) {
+    const updatedTarget = inbox ? updateInboxObj(inbox) : { id: targetId, email, banStatus: 'confirmed', isBanned: true, isAmazon: true, banReason: effectiveReason, isOfficial: true };
+    if (!state.banned.some(i => i.id === targetId || i.email === email)) {
+      state.banned.push(updatedTarget);
+    } else {
+      state.banned = state.banned.map(updateInboxObj);
+    }
+  } else {
+    state.banned = state.banned.filter(i => i.id !== targetId && i.email !== email);
+  }
+  state.suspected = (state.suspected || []).filter(i => i.id !== targetId && i.email !== email);
+
+  if ($('banned-count')) $('banned-count').textContent = formatNumber(state.banned.length);
+  renderInboxes();
+  if (state.view === 'amazon' || state.view === 'banned' || state.view === 'current') renderContent();
+
+  let persisted = false;
   try {
     await api('/api/inbox/ban-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, banStatus, reason })
+      body: JSON.stringify({ id: targetId, email: email, banStatus, reason: effectiveReason })
     });
-    const text = banStatus === 'confirmed' ? 'تم تأكيد حظر الحساب بنجاح ⛔' : 'تم تأكيد سلامة الحساب وإلغاء الاشتباه ✅';
-    toast(text);
-    await refreshEverything();
+    persisted = true;
   } catch (err) {
     try {
-      const docId = id.includes('@') ? `inbox_${id.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : id;
-      const updateUrl = `https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/${encodeURIComponent(docId)}?updateMask.fieldPaths=banStatus&updateMask.fieldPaths=isBanned`;
-      const res = await fetch(updateUrl, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fields: {
-            banStatus: { stringValue: banStatus },
-            isBanned: { booleanValue: banStatus === 'confirmed' },
-            ...(reason ? { banReason: { stringValue: reason } } : {})
-          }
-        })
-      });
-      if (res.ok) {
-        const text = banStatus === 'confirmed' ? 'تم تأكيد حظر الحساب بنجاح ⛔' : 'تم تأكيد سلامة الحساب وإلغاء الاشتباه ✅';
-        toast(text);
-        await refreshEverything();
-        return;
+      let docIdsToTry = [];
+      if (inbox && inbox.id) docIdsToTry.push(inbox.id);
+      if (targetId && !docIdsToTry.includes(targetId)) docIdsToTry.push(targetId);
+      if (email) {
+        docIdsToTry.push(`inbox_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`);
+      }
+
+      for (const docId of docIdsToTry) {
+        if (!docId) continue;
+        const updateUrl = `https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/${encodeURIComponent(docId)}?updateMask.fieldPaths=banStatus&updateMask.fieldPaths=isBanned&updateMask.fieldPaths=isAmazon&updateMask.fieldPaths=banReason&updateMask.fieldPaths=banDecisionSource&updateMask.fieldPaths=banDecisionAt`;
+        const res = await fetch(updateUrl, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fields: {
+              banStatus: { stringValue: banStatus },
+              isBanned: { booleanValue: isConfirmed },
+              isAmazon: { booleanValue: true },
+              banReason: { stringValue: effectiveReason },
+              banDecisionSource: { stringValue: 'user' },
+              banDecisionAt: { timestampValue: new Date().toISOString() }
+            }
+          })
+        });
+        if (res.ok) {
+          persisted = true;
+          break;
+        }
       }
     } catch (fsErr) {
       console.error('Firestore REST fallback error:', fsErr);
     }
-    toast(friendlyError(err), true);
   }
+  if (!persisted) {
+    await loadInboxes().catch(() => {});
+    if (state.view === 'amazon') renderAmazonHub();
+    toast('تعذر تثبيت حالة الحساب؛ لم يتم اعتباره محظورًا', true);
+    return false;
+  }
+  saveManualBanDecision(targetId, email, banStatus, effectiveReason);
+  const text = isConfirmed ? 'تم نقل الحساب إلى قائمة المحظورة ⛔' : 'تم نقل الحساب إلى قائمة السليمة ✅';
+  toast(text);
+  return true;
 }
 
 const autoCheckedInboxes = new Set();
@@ -588,21 +746,24 @@ function findSuspectedMessageForInbox(inbox) {
 }
 
 async function submitAiFeedback(inboxId, messageId, verdict, subject = '') {
+  const isConfirm = verdict === 'confirm' || verdict === 'banned';
+  const banStatus = isConfirm ? 'confirmed' : 'safe';
+  const inbox = findInboxById(inboxId);
+  const reason = isConfirm ? 'إغلاق وتأكيد الحظر' : 'استبعاد النمط وتدريب الكود';
+
+  const persisted = await updateBanStatus(inboxId, banStatus, reason);
+  if (!persisted) return;
+
+  if (state.currentMessage) closeReader(false);
+
   try {
     await api('/api/ai/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inboxId, messageId, verdict, subject })
     });
-    if (verdict === 'confirm') {
-      toast('تم تأكيد إغلاق الحساب وتسجيل الحالة ⛔');
-    } else {
-      toast('تم استبعاد هذا النمط وتحديث قواعد النظام بنجاح 🧠');
-    }
-    if (state.currentMessage) closeReader(false);
-    await refreshEverything();
   } catch (err) {
-    toast(friendlyError(err), true);
+    // Ignore secondary feedback log errors
   }
 }
 
@@ -679,22 +840,49 @@ function findInboxByEmail(email) {
 }
 
 async function loadInboxes() {
-  const data = await api('/api/inboxes');
-  state.official = (data.official || []).map(i => ({
+  const [data, firestore] = await Promise.all([
+    api('/api/inboxes'),
+    fetchFirestoreInboxes().catch(() => null)
+  ]);
+  const metadata = new Map();
+  for (const inbox of [...(firestore?.official || []), ...(firestore?.temp || [])]) {
+    if (inbox.id) metadata.set(`id:${inbox.id}`, inbox);
+    if (inbox.email) metadata.set(`email:${inbox.email.toLowerCase()}`, inbox);
+  }
+  const mergeStatus = inbox => {
+    const cloud = metadata.get(`id:${inbox.id}`) || metadata.get(`email:${String(inbox.email || '').toLowerCase()}`);
+    const merged = cloud ? {
+      ...inbox,
+      isAmazon: cloud.isAmazon ?? inbox.isAmazon,
+      isBanned: cloud.isBanned ?? inbox.isBanned,
+      banStatus: cloud.banStatus || inbox.banStatus,
+      banReason: cloud.banReason || inbox.banReason
+    } : inbox;
+    const manual = getManualBanDecision(merged);
+    if (!manual) return merged;
+    return {
+      ...merged,
+      banStatus: manual.status,
+      isBanned: manual.status === 'confirmed',
+      isAmazon: true,
+      banReason: manual.reason || merged.banReason
+    };
+  };
+  state.official = (data.official || firestore?.official || []).map(mergeStatus).map(i => ({
     ...i,
     isBanned: isConfirmedBanned(i),
     isSuspected: isSuspectedInbox(i),
     isAmazon: isAmazonInbox(i)
   }));
-  state.temp = data.temp || [];
-  state.amazon = (data.amazon || state.official.filter(i => i.isAmazon)).map(i => ({
+  state.temp = (data.temp || firestore?.temp || []).map(mergeStatus);
+  state.amazon = state.official.filter(i => i.isAmazon).map(i => ({
     ...i,
     isAmazon: true,
     isBanned: isConfirmedBanned(i),
     isSuspected: isSuspectedInbox(i)
   }));
-  state.banned = (data.banned || state.official.filter(i => isConfirmedBanned(i))).map(i => ({ ...i, isBanned: true, isAmazon: true }));
-  state.suspected = (data.suspected || state.official.filter(i => isSuspectedInbox(i))).map(i => ({ ...i, isAmazon: true, isSuspected: true }));
+  state.banned = state.official.filter(i => isConfirmedBanned(i)).map(i => ({ ...i, isBanned: true, isAmazon: true }));
+  state.suspected = state.official.filter(i => isSuspectedInbox(i)).map(i => ({ ...i, isAmazon: true, isSuspected: true }));
   state.activeId = data.activeId || state.activeId;
   if (state.activeId) {
     markInboxAsRead(state.activeId);
@@ -703,7 +891,6 @@ async function loadInboxes() {
   $('temp-count').textContent = formatNumber(state.temp.length);
   if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
   if ($('banned-count')) $('banned-count').textContent = formatNumber(state.banned.length);
-  autoVerifySuspectedInboxes();
   renderInboxes();
 }
 
@@ -788,6 +975,7 @@ function renderInboxes() {
     const banned = isConfirmedBanned(inbox);
     const suspected = isSuspectedInbox(inbox);
     const amazon = isAmazonInbox(inbox);
+    const reason = inbox.banReason || (banned ? 'محظور أو مقيد' : 'بانتظار المراجعة');
     const unread = isInboxUnread(inbox);
     const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
     const id = encodeURIComponent(inbox.id || '');
@@ -813,7 +1001,7 @@ function renderInboxes() {
             <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
-      </div>`
+      </div>
       <span class="inbox-count ${unread ? 'unread' : ''}">${formatNumber(inbox.messageCount || 0)}</span>
       <button class="inbox-more" data-delete-id="${attr(id)}" title="حذف الصندوق" aria-label="حذف الصندوق"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5"/></svg></button>
     </article>`;
@@ -953,6 +1141,36 @@ function isAmazonOrderMessage(msg) {
   return /طلب|شحن|شحنة|توصيل|تم شحن|تأكيد الطلب|order|shipment|delivery|shipped|dispatched|package|tracking/i.test(text);
 }
 
+function setAmazonView(view, filter = 'all') {
+  state.amazonView = view === 'messages' ? 'messages' : 'accounts';
+  if (state.amazonView === 'accounts') {
+    state.amazonAccountFilter = filter;
+    state.amazonSelectedInbox = null;
+    amazonAccountLimit = 24;
+  } else {
+    state.amazonSubFilter = filter;
+    amazonMessageLimit = 20;
+  }
+  const search = $('amazon-search');
+  if (search) search.placeholder = state.amazonView === 'accounts' ? 'ابحث باسم الحساب أو البريد…' : 'ابحث في رسائل أمازون…';
+  document.querySelectorAll('#amazon-sub-tabs [data-amazon-view]').forEach(button => {
+    const active = button.dataset.amazonView === state.amazonView && (state.amazonView === 'accounts' || button.dataset.amazonFilter === state.amazonSubFilter);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  renderAmazonHub();
+}
+
+function getFilteredAmazonAccounts() {
+  let list = state.amazon || [];
+  if (state.amazonAccountFilter === 'healthy') list = list.filter(inbox => !isConfirmedBanned(inbox) && !isSuspectedInbox(inbox));
+  else if (state.amazonAccountFilter === 'suspected') list = list.filter(inbox => !isConfirmedBanned(inbox) && isSuspectedInbox(inbox));
+  else if (state.amazonAccountFilter === 'banned') list = list.filter(isConfirmedBanned);
+  const query = normalize($('amazon-search')?.value);
+  if (query) list = list.filter(inbox => normalize([inbox.email, inbox.personName, inbox.label, inbox.banReason].join(' ')).includes(query));
+  return list;
+}
+
 function getFilteredAmazonMessages() {
   let list = state.amazonMessages || [];
   if (state.amazonSelectedInbox) {
@@ -985,38 +1203,47 @@ function getFilteredAmazonMessages() {
 function renderAmazonInboxesReel() {
   const reel = $('amazon-inboxes-reel');
   if (!reel) return;
-  const inboxes = state.amazon || [];
-  const selectedEmail = state.amazonSelectedInbox;
-
-  let htmlStr = `<button class="amazon-reel-item ${!selectedEmail ? 'active' : ''}" data-reel-inbox="all">
-    <span>🌐 كل حسابات أمازون</span>
-    <span class="reel-count">${formatNumber(state.amazonMessages.length)}</span>
-  </button>`;
-
-  htmlStr += inboxes.map(inbox => {
-    const isSelected = selectedEmail && inbox.email?.toLowerCase() === selectedEmail.toLowerCase();
-    const count = (state.amazonMessages || []).filter(m => (m.inboxEmail || '').toLowerCase() === (inbox.email || '').toLowerCase()).length;
-    const label = inbox.personName || inbox.label || inbox.email?.split('@')[0] || 'حساب';
-    const isBanned = isConfirmedBanned(inbox);
-    const isSuspected = isSuspectedInbox(inbox);
-    return `<button class="amazon-reel-item ${isSelected ? 'active' : ''} ${isSuspected ? 'is-suspected' : isBanned ? 'is-banned' : ''}" data-reel-inbox="${attr(inbox.email || '')}" title="${attr(inbox.email || '')}">
-      <span>${isBanned ? '⛔' : isSuspected ? '⚠️' : '🛒'} ${html(label)}</span>
-      <span class="reel-count">${formatNumber(count)}</span>
-    </button>`;
-  }).join('');
-
-  htmlStr += `<button class="amazon-reel-add" id="reel-quick-add" type="button" title="إنشاء حساب تتابعي فوري">
-    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-    <span>+ حساب جديد</span>
-  </button>`;
-
-  reel.innerHTML = htmlStr;
+  if (state.amazonView !== 'accounts') { reel.classList.add('hidden'); return; }
+  reel.classList.remove('hidden');
+  const inboxes = getFilteredAmazonAccounts();
+  const visible = inboxes.slice(0, amazonAccountLimit);
+  const statusTitle = { all: 'كل حسابات أمازون', healthy: 'الحسابات السليمة', suspected: 'حسابات تحتاج مراجعة', banned: 'الحسابات المحظورة والمقيدة' }[state.amazonAccountFilter] || 'حسابات أمازون';
+  if ($('amazon-results-kicker')) $('amazon-results-kicker').textContent = 'إدارة الحسابات';
+  if ($('amazon-results-title')) $('amazon-results-title').textContent = statusTitle;
+  if ($('amazon-results-count')) $('amazon-results-count').textContent = `${formatNumber(inboxes.length)} حساب`;
+  if (!inboxes.length) {
+    reel.innerHTML = `<div class="amazon-empty"><span>✓</span><h3>لا توجد حسابات مطابقة</h3><p>غيّر التصنيف أو عبارة البحث لعرض نتائج أخرى.</p><button id="reel-quick-add" type="button">إنشاء حساب أمازون</button></div>`;
+    return;
+  }
+  reel.innerHTML = visible.map(inbox => {
+    const email = inbox.email || '';
+    const count = Math.max(Number(inbox.messageCount || 0), (state.amazonMessages || []).filter(m => (m.inboxEmail || '').toLowerCase() === email.toLowerCase()).length);
+    const label = inbox.personName || inbox.label || email.split('@')[0] || 'حساب أمازون';
+    const banned = isConfirmedBanned(inbox);
+    const suspected = !banned && isSuspectedInbox(inbox);
+    const status = banned ? 'محظور' : suspected ? 'يحتاج مراجعة' : 'سليم';
+    const statusClass = banned ? 'banned' : suspected ? 'suspected' : 'healthy';
+    return `<article class="amazon-account-card ${statusClass}" data-account-id="${attr(inbox.id || '')}">
+      <header><div class="amazon-account-avatar">${banned ? '!' : suspected ? '?' : 'a'}</div><div><h4>${html(label)}</h4><span class="amazon-account-status">${html(status)}</span></div><b class="amazon-account-count">${formatNumber(count)} رسالة</b></header>
+      <button class="amazon-account-email" type="button" data-amazon-copy="${attr(encodeURIComponent(email))}" title="نسخ البريد"><span dir="ltr">${html(email)}</span><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
+      ${banned && inbox.banReason ? `<p class="amazon-account-reason">${html(inbox.banReason)}</p>` : ''}
+      ${suspected ? `<div class="amazon-review-actions"><span>هل الحساب محظور فعلًا؟</span><button type="button" data-confirm-ban="${attr(inbox.id)}" data-reason="${attr(inbox.banReason || '')}">تأكيد الحظر</button><button type="button" data-mark-safe="${attr(inbox.id)}">الحساب سليم</button><button type="button" data-ai-verify="${attr(inbox.id)}">فحص AI</button></div>` : ''}
+      <footer><button type="button" data-amazon-messages="${attr(encodeURIComponent(email))}">عرض رسائل الحساب <span>←</span></button><time>${html(inbox.createdAt ? formatDate(inbox.createdAt) : '')}</time></footer>
+    </article>`;
+  }).join('') + (visible.length < inboxes.length ? `<button class="amazon-load-more" type="button" data-amazon-load-more>عرض ${formatNumber(Math.min(24, inboxes.length - visible.length))} حسابًا إضافيًا</button>` : '');
 }
 
 function renderAmazonMessages() {
   const container = $('amazon-message-list');
   if (!container) return;
+  if (state.amazonView !== 'messages') { container.classList.add('hidden'); return; }
+  container.classList.remove('hidden');
   const list = getFilteredAmazonMessages();
+  const visible = list.slice(0, amazonMessageLimit);
+  const title = state.amazonSelectedInbox ? `رسائل ${state.amazonSelectedInbox}` : state.amazonSubFilter === 'otp' ? 'رموز التحقق OTP' : state.amazonSubFilter === 'orders' ? 'الطلبات والشحنات' : 'كل رسائل أمازون';
+  if ($('amazon-results-kicker')) $('amazon-results-kicker').textContent = 'صندوق أمازون';
+  if ($('amazon-results-title')) $('amazon-results-title').textContent = title;
+  if ($('amazon-results-count')) $('amazon-results-count').textContent = `${formatNumber(list.length)} رسالة`;
 
   if (!list.length) {
     container.innerHTML = `<div class="empty-state" style="padding: 36px 16px;">
@@ -1027,7 +1254,7 @@ function renderAmazonMessages() {
     return;
   }
 
-  container.innerHTML = list.map(message => {
+  container.innerHTML = visible.map(message => {
     const sender = cleanSenderName(message.from, message.subject);
     const otp = message.otp ? String(message.otp) : '';
     const hasBanContent = isBannedMessage(message);
@@ -1061,7 +1288,7 @@ function renderAmazonMessages() {
       </div>
       ${otp ? `<button class="otp-chip highlight" data-copy-otp="${attr(encodeURIComponent(otp))}"><span>رمز التحقق</span><strong>${html(otp)}</strong></button>` : '<span class="message-arrow">←</span>'}
     </article>`;
-  }).join('');
+  }).join('') + (visible.length < list.length ? `<button class="amazon-load-more" type="button" data-amazon-messages-more>عرض ${formatNumber(Math.min(20, list.length - visible.length))} رسالة إضافية</button>` : '');
 }
 
 function renderAmazonHub() {
@@ -1077,11 +1304,13 @@ function renderAmazonHub() {
     return isConfirmedBanned(inbox);
   });
   const orders = amzMsgs.filter(m => isAmazonOrderMessage(m));
+  const healthy = (state.amazon || []).filter(inbox => !isConfirmedBanned(inbox) && !isSuspectedInbox(inbox));
 
   if ($('amazon-stat-inboxes')) $('amazon-stat-inboxes').textContent = formatNumber(state.amazon.length);
   if ($('amazon-stat-messages')) $('amazon-stat-messages').textContent = formatNumber(amzMsgs.length);
+  if ($('amazon-stat-healthy')) $('amazon-stat-healthy').textContent = formatNumber(healthy.length);
   if ($('amazon-stat-otps')) $('amazon-stat-otps').textContent = formatNumber(otps.length);
-  if ($('amazon-stat-suspected')) $('amazon-stat-suspected').textContent = formatNumber(state.suspected.length || suspectedMsgs.length);
+  if ($('amazon-stat-suspected')) $('amazon-stat-suspected').textContent = formatNumber(state.suspected.length);
   if ($('amazon-stat-banned')) $('amazon-stat-banned').textContent = formatNumber(state.banned.length || bannedMsgs.length);
 
   if ($('amazon-nav-count')) $('amazon-nav-count').textContent = formatNumber(amzMsgs.length);
@@ -1266,7 +1495,7 @@ async function openMessage(id, pushHistory = true) {
     const recipient = formatAddress(message.to) || message.inboxEmail || state.activeInbox?.email || '—';
     const isBanned = isBannedMessage(message);
     const isAmz = isAmazonMessage(message);
-    const isOff = isOfficial(state.activeInbox) || (message.inboxEmail && message.inboxEmail.endsWith('@batabitoo.com'));
+    const isOff = isOfficial(state.activeInbox) || (message.inboxEmail && (message.inboxEmail.endsWith('@batabitoo.com') || message.inboxEmail.endsWith('@gmail.com')));
 
     $('reader-subject').textContent = message.subject || '(بدون عنوان)';
     $('reader-from').textContent = sender;
@@ -1442,24 +1671,96 @@ function closeModal(type) {
 async function createInbox(event) {
   event.preventDefault();
   const name = $('create-name').value.trim();
-  const prefix = $('create-prefix').value.trim();
-  const path = state.createType === 'official' ? '/api/official/create' : '/api/inboxes/create';
+  const rawPrefix = $('create-prefix').value.trim();
+  const isGmail = state.createType === 'gmail';
+  const isOfficialType = state.createType === 'official' || isGmail;
+  const domain = isGmail ? 'gmail.com' : 'batabitoo.com';
+
   const button = $('create-submit');
   setBusy(button, true, 'جاري إنشاء الصندوق…');
   try {
-    const data = await api(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ personName: name || undefined, label: name || undefined, prefix: prefix || undefined })
-    });
-    if (!data.inbox) throw new Error('لم يرجع الخادم صندوقًا جديدًا');
+    let createdInbox = null;
+
+    if (isGmail) {
+      const cleanPrefix = rawPrefix ? (rawPrefix.includes('@') ? rawPrefix.split('@')[0] : rawPrefix.replace(/[^a-z0-9\.]/g, '')) : 'amazon.acc';
+      const email = rawPrefix.includes('@') ? rawPrefix.toLowerCase() : `${cleanPrefix}@gmail.com`.toLowerCase();
+      const cleanName = name || `حساب رسمي (${email.split('@')[0]})`;
+      const docId = `official_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const record = {
+        id: docId,
+        email: email,
+        domain: 'gmail.com',
+        host: 'Gmail (Google Official)',
+        isOfficial: true,
+        isAmazon: false,
+        isBanned: false,
+        banStatus: 'none',
+        banReason: '',
+        type: 'official',
+        label: cleanName,
+        personName: cleanName,
+        createdAt: new Date().toISOString(),
+        messageCount: 0
+      };
+      const firestoreFields = {
+        id: { stringValue: docId },
+        email: { stringValue: email },
+        domain: { stringValue: 'gmail.com' },
+        host: { stringValue: 'Gmail (Google Official)' },
+        isOfficial: { booleanValue: true },
+        isAmazon: { booleanValue: false },
+        isBanned: { booleanValue: false },
+        banStatus: { stringValue: 'none' },
+        banReason: { stringValue: '' },
+        type: { stringValue: 'official' },
+        label: { stringValue: cleanName },
+        personName: { stringValue: cleanName },
+        createdAt: { stringValue: record.createdAt },
+        messageCount: { integerValue: "0" }
+      };
+
+      // 1. Sync to local node server if running
+      fetch('http://localhost:3030/api/official/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, prefix: cleanPrefix, domain: 'gmail.com', personName: cleanName, label: cleanName })
+      }).catch(() => {});
+
+      // 2. Save directly to Firestore Cloud REST API
+      const fsRes = await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: firestoreFields })
+      });
+      if (fsRes.ok) {
+        createdInbox = record;
+      }
+    }
+
+    if (!createdInbox) {
+      const path = isOfficialType ? '/api/official/create' : '/api/inboxes/create';
+      const data = await api(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personName: name || undefined,
+          label: name || undefined,
+          prefix: rawPrefix || undefined,
+          email: rawPrefix.includes('@') ? rawPrefix : undefined,
+          domain: domain
+        })
+      });
+      createdInbox = data.inbox;
+    }
+
+    if (!createdInbox) throw new Error('لم يرجع الخادم صندوقًا جديدًا');
     $('create-modal').classList.add('hidden');
     $('create-form').reset();
-    state.inboxType = state.createType;
+    state.inboxType = isOfficialType ? 'official' : 'temp';
     document.querySelectorAll('[data-inbox-type]').forEach(item => item.classList.toggle('active', item.dataset.inboxType === state.inboxType));
     await loadInboxes();
-    await selectInbox(data.inbox.id);
-    toast(`تم إنشاء ${data.inbox.email}`);
+    await selectInbox(createdInbox.id);
+    toast(`تم إنشاء ${createdInbox.email}`);
   } catch (error) {
     toast(friendlyError(error), true);
   } finally {
@@ -1546,7 +1847,7 @@ async function copyText(value, message) {
 }
 
 function isOfficial(inbox) {
-  return inbox?.isOfficial === true || inbox?.type === 'official' || String(inbox?.email || '').toLowerCase().endsWith('@batabitoo.com');
+  return inbox?.isOfficial === true || inbox?.type === 'official' || String(inbox?.email || '').toLowerCase().endsWith('@batabitoo.com') || String(inbox?.email || '').toLowerCase().endsWith('@gmail.com');
 }
 
 function isAmazonMessage(msg) {

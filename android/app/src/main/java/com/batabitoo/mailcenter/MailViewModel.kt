@@ -53,6 +53,7 @@ data class MailUiState(
     val refreshing: Boolean = false,
     val showCreate: Boolean = false,
     val createOfficial: Boolean = true,
+    val createDomain: String = "batabitoo.com",
     val autoRefresh: Boolean = true,
     val baseUrl: String = MailRepository.DEFAULT_BASE_URL,
     val notice: String? = null,
@@ -287,16 +288,17 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createSequentialInbox(base: String = "ahmedroou") {
         val nextPrefix = getNextSequentialPrefix(base)
-        setCreateType(true)
+        setCreateType(true, "batabitoo.com")
         createInbox(name = nextPrefix, prefix = nextPrefix)
     }
 
     fun createInbox(name: String, prefix: String) {
         viewModelScope.launch {
             val official = _uiState.value.createOfficial
+            val domain = _uiState.value.createDomain
             _uiState.update { it.copy(refreshing = true, error = null) }
             runCatching {
-                val created = repository.createInbox(official, name, prefix)
+                val created = repository.createInbox(official, name, prefix, domain = domain)
                 repository.selectInbox(created.id)
                 created
             }.onSuccess { created ->
@@ -423,7 +425,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     fun setMessageFilter(value: MessageFilter) = _uiState.update { it.copy(messageFilter = value, search = "") }
     fun setSearch(value: String) = _uiState.update { it.copy(search = value) }
     fun setCreateVisible(value: Boolean) = _uiState.update { it.copy(showCreate = value) }
-    fun setCreateType(official: Boolean) = _uiState.update { it.copy(createOfficial = official) }
+    fun setCreateType(official: Boolean, domain: String = "batabitoo.com") = _uiState.update { it.copy(createOfficial = official, createDomain = domain) }
     fun setAutoRefresh(value: Boolean) = _uiState.update { it.copy(autoRefresh = value) }
     fun closeMessage() { ++messageRequest; _uiState.update { it.copy(selectedMessage = null, messageLoading = false, messageError = null) } }
     fun consumeNotice() = _uiState.update { it.copy(notice = null, error = null) }

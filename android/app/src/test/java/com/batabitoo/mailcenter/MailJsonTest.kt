@@ -402,4 +402,30 @@ class MailJsonTest {
         )
         assertEquals("Amazon.sa", friendlyAmz)
     }
+
+    @Test
+    fun recognizesGmailAsOfficialInboxAndAmazonEligible() {
+        val gmailInbox = Inbox(id = "g1", email = "test.merchant@gmail.com")
+        assertTrue(AmazonDetector.isOfficialInbox(gmailInbox))
+
+        val batabitooInbox = Inbox(id = "b1", email = "orders@batabitoo.com")
+        assertTrue(AmazonDetector.isOfficialInbox(batabitooInbox))
+
+        val tempInbox = Inbox(id = "t1", email = "temp123@getnada.com")
+        assertFalse(AmazonDetector.isOfficialInbox(tempInbox))
+
+        // Firestore inbox parser
+        val jsonDoc = org.json.JSONObject("""{
+            "name": "projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/g1",
+            "fields": {
+                "email": { "stringValue": "vendor.amz@gmail.com" },
+                "domain": { "stringValue": "gmail.com" },
+                "personName": { "stringValue": "أمازون جيميل" }
+            }
+        }""")
+        val parsed = MailJson.firestoreInbox(jsonDoc)
+        assertTrue(parsed.isOfficial)
+        assertEquals("vendor.amz@gmail.com", parsed.email)
+    }
 }
+

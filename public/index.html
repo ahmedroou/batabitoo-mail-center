@@ -17,12 +17,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=13">
   <link rel="stylesheet" href="/reader.css?v=2">
-  <link rel="stylesheet" href="/amazon.css?v=1">
+  <link rel="stylesheet" href="/amazon.css?v=2">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand">
+      <div class="brand" id="brand-home-btn" role="button" tabindex="0" title="الرجوع إلى الرئيسية">
         <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 9.5 16 4l11 5.5v13L16 28 5 22.5z"/><path d="m8 11 8 5 8-5M16 16v8"/></svg></div>
         <div class="brand-copy"><span>صباح الخير 👋</span><h1>بريد بطابيطو</h1></div>
       </div>
@@ -35,12 +35,12 @@
     </header>
 
     <section class="stats-strip" aria-label="ملخص النظام">
-      <article class="stat-card stat-main"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>كل الصناديق</span><strong id="stat-total">—</strong></div><small id="stat-sync">مزامنة آمنة</small></article>
-      <article class="stat-card"><div class="stat-icon gold"><svg viewBox="0 0 24 24"><path d="m5 16-1-9 5 4 3-6 3 6 5-4-1 9zM6 19h12"/></svg></div><div><span>الرسمي</span><strong id="stat-official">—</strong></div></article>
-      <article class="stat-card"><div class="stat-icon cyan"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg></div><div><span>السريع</span><strong id="stat-temp">—</strong></div></article>
-      <article class="stat-card stat-clickable" id="stat-amazon-card" role="button" tabindex="0" title="فتح مركز أمازون"><div class="stat-icon amazon-stat"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg></div><div><span>أمازون</span><strong id="stat-amazon">—</strong></div></article>
-      <article class="stat-card"><div class="stat-icon banned-stat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></div><div><span>المحظور</span><strong id="stat-banned">—</strong></div></article>
-      <article class="stat-card"><div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>الرسائل</span><strong id="stat-messages">—</strong></div></article>
+      <article class="stat-card stat-main stat-clickable" id="stat-all-card" role="button" tabindex="0" title="عرض كل الصناديق والرسائل"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>كل الصناديق</span><strong id="stat-total">—</strong></div><small id="stat-sync">مزامنة آمنة</small></article>
+      <article class="stat-card stat-clickable" id="stat-official-card" role="button" tabindex="0" title="عرض البريد الرسمي"><div class="stat-icon gold"><svg viewBox="0 0 24 24"><path d="m5 16-1-9 5 4 3-6 3 6 5-4-1 9zM6 19h12"/></svg></div><div><span>الرسمي</span><strong id="stat-official">—</strong></div></article>
+      <article class="stat-card stat-clickable" id="stat-temp-card" role="button" tabindex="0" title="عرض البريد السريع"><div class="stat-icon cyan"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg></div><div><span>السريع</span><strong id="stat-temp">—</strong></div></article>
+      <article class="stat-card stat-clickable" id="stat-amazon-card" role="button" tabindex="0" title="فتح أو الرجوع من مركز أمازون"><div class="stat-icon amazon-stat"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0"/></svg></div><div><span>أمازون</span><strong id="stat-amazon">—</strong></div></article>
+      <article class="stat-card stat-clickable" id="stat-banned-card" role="button" tabindex="0" title="عرض الحسابات والرسائل المحظورة"><div class="stat-icon banned-stat"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></div><div><span>المحظور</span><strong id="stat-banned">—</strong></div></article>
+      <article class="stat-card stat-clickable" id="stat-messages-card" role="button" tabindex="0" title="عرض الرسائل الواردة"><div class="stat-icon violet"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM4 8l8 6 8-6"/></svg></div><div><span>الرسائل</span><strong id="stat-messages">—</strong></div></article>
     </section>
 
     <main class="workspace">
@@ -70,6 +70,18 @@
 
         <!-- Dedicated Amazon Hub Section -->
         <section class="amazon-hub-shell hidden" id="amazon-hub-shell" aria-label="مركز إدارة رسائل وحسابات أمازون">
+          <div class="amazon-top-bar">
+            <button class="amazon-back-btn" id="amazon-back-btn" type="button" aria-label="الرجوع إلى البريد الوارد والرئيسية">
+              <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+              <span>الرجوع إلى البريد الوارد</span>
+            </button>
+            <div class="amazon-top-breadcrumbs">
+              <button type="button" class="crumb-link" id="amazon-crumb-home">الرئيسية</button>
+              <span class="crumb-separator">/</span>
+              <span class="crumb-active">🛒 مركز حسابات أمازون</span>
+            </div>
+          </div>
+
           <div class="amazon-hub-hero">
             <div class="amazon-hero-main">
               <div class="amazon-brand-badge"><span class="amazon-cart-icon">a</span><span>Amazon Accounts</span><i></i></div>
@@ -80,13 +92,17 @@
                   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
                   <span>إنشاء الحساب التالي <b id="amazon-seq-name">ahmedroou</b></span>
                 </button>
+                <button class="soft-button amazon-hero-back" id="amazon-hero-back-btn" type="button" title="الرجوع إلى البريد الوارد">
+                  <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+                  <span>الرجوع للوارد</span>
+                </button>
                 <button class="soft-button" id="amazon-copy-active-btn" type="button">
                   <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
-                  <span>نسخ البريد النشط</span>
+                  <span>نسخ البريد</span>
                 </button>
                 <button class="soft-button" id="amazon-refresh-btn" type="button">
                   <svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg>
-                  <span>تحديث البيانات</span>
+                  <span>تحديث</span>
                 </button>
               </div>
             </div>
@@ -228,11 +244,11 @@
     <button data-mobile-view="logs"><svg viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></svg><span>السجل</span></button>
   </nav>
 
-  <div class="modal-backdrop hidden" id="create-modal" role="dialog" aria-modal="true"><article class="modal-card create-card"><div class="sheet-handle"></div><header class="modal-header"><div><span class="section-kicker">خطوة واحدة</span><h2>صندوق بريد جديد</h2><p>اختر النوع وأعطه اسمًا واضحًا.</p></div><button class="icon-button" data-close-modal="create" aria-label="إغلاق">×</button></header><div class="type-picker" id="create-type"><button class="active official-choice" data-create-type="official"><span class="choice-icon">♛</span><strong>بريد رسمي</strong><small>@batabitoo.com</small></button><button data-create-type="temp"><span class="choice-icon">ϟ</span><strong>بريد سريع</strong><small>جاهز بلحظات</small></button></div><button type="button" class="seq-chip" id="seq-official-btn"><span class="seq-chip-title"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg> بريد رسمي تتابعي (ahmedroou)</span><b id="seq-preview">ahmedroou</b></button><form id="create-form"><label class="field"><span>اسم الحساب</span><input id="create-name" autocomplete="off" placeholder="مثال: حساب أمازون"></label><label class="field"><span>عنوان البريد</span><div class="prefix-field"><input id="create-prefix" dir="ltr" autocomplete="off" placeholder="amazon.account"><b id="prefix-suffix">@batabitoo.com</b></div><small>الأحرف الإنجليزية والأرقام والنقطة فقط.</small></label><button class="submit-button" id="create-submit" type="submit"><span>إنشاء الصندوق</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></form></article></div>
+  <div class="modal-backdrop hidden" id="create-modal" role="dialog" aria-modal="true"><article class="modal-card create-card"><div class="sheet-handle"></div><header class="modal-header"><div><span class="section-kicker">خطوة واحدة</span><h2>صندوق بريد جديد</h2><p>اختر النوع وأعطه اسمًا واضحًا.</p></div><button class="icon-button" data-close-modal="create" aria-label="إغلاق">×</button></header><div class="type-picker" id="create-type"><button class="active official-choice" data-create-type="official"><span class="choice-icon">♛</span><strong>بريد رسمي</strong><small>@batabitoo.com</small></button><button class="gmail-choice" data-create-type="gmail"><span class="choice-icon">📧</span><strong>حساب Gmail</strong><small>@gmail.com</small></button><button data-create-type="temp"><span class="choice-icon">ϟ</span><strong>بريد سريع</strong><small>جاهز بلحظات</small></button></div><button type="button" class="seq-chip" id="seq-official-btn"><span class="seq-chip-title"><svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg> بريد رسمي تتابعي (ahmedroou)</span><b id="seq-preview">ahmedroou</b></button><form id="create-form"><label class="field"><span>اسم الحساب</span><input id="create-name" autocomplete="off" placeholder="مثال: حساب أمازون"></label><label class="field"><span>عنوان البريد</span><div class="prefix-field"><input id="create-prefix" dir="ltr" autocomplete="off" placeholder="amazon.account"><b id="prefix-suffix">@batabitoo.com</b></div><small id="create-prefix-help">الأحرف الإنجليزية والأرقام والنقطة فقط.</small></label><button class="submit-button" id="create-submit" type="submit"><span>إنشاء الصندوق</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></form></article></div>
 
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=18" defer></script>
+  <script src="/app.js?v=20" defer></script>
 </body>
 </html>

@@ -352,7 +352,7 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
             }
             MailPills(
                 listOf(
-                    "بريد رسمي (@batabitoo.com)  ${arabicNumber(state.officialInboxes.size)}",
+                    "بريد رسمي  ${arabicNumber(state.officialInboxes.size)}",
                     "بريد سريع (مؤقت)  ${arabicNumber(state.tempInboxes.size)}",
                 ),
                 state.inboxFilter.ordinal,
@@ -876,6 +876,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 refreshing = state.refreshing,
                 onCreate = { viewModel.createSequentialInbox() },
                 onRefresh = { viewModel.refreshAll() },
+                onBack = { viewModel.setSection(MainSection.INBOXES) },
             )
         }
 
@@ -998,6 +999,7 @@ private fun AmazonUniverseHero(
     refreshing: Boolean,
     onCreate: () -> Unit,
     onRefresh: () -> Unit,
+    onBack: () -> Unit = {},
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "amazonHero")
     val floatOffset by infiniteTransition.animateFloat(
@@ -1043,18 +1045,19 @@ private fun AmazonUniverseHero(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .background(Color(0xFFFF9900).copy(alpha = 0.18f))
+                            .clickable(onClick = onBack)
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFF9900))
+                        Icon(
+                            Icons.Rounded.Inbox,
+                            contentDescription = "الرجوع للرئيسية",
+                            tint = Color(0xFFFF9900),
+                            modifier = Modifier.size(15.dp),
                         )
                         Text(
-                            text = "مركز أمازون الذكي",
+                            text = "الرجوع للرئيسية",
                             color = Color(0xFFFF9900),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -2465,80 +2468,122 @@ private fun CreateInboxSheet(state: MailUiState, viewModel: MailViewModel) {
             Text("صندوق بريد جديد", style = MaterialTheme.typography.headlineMedium)
             Text("اختر النوع وأعطه اسمًا واضحًا.", color = Muted, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(18.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ChoiceCard("بريد رسمي", "@batabitoo.com", Icons.Rounded.WorkspacePremium, Gold, state.createOfficial, Modifier.weight(1f)) { viewModel.setCreateType(true) }
-                ChoiceCard("بريد سريع", "جاهز بلحظات", Icons.Rounded.Bolt, Cyan, !state.createOfficial, Modifier.weight(1f)) { viewModel.setCreateType(false) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceCard(
+                    title = "بريد رسمي",
+                    subtitle = "@batabitoo.com",
+                    icon = Icons.Rounded.WorkspacePremium,
+                    color = Gold,
+                    selected = state.createOfficial && state.createDomain == "batabitoo.com",
+                    modifier = Modifier.weight(1f)
+                ) { viewModel.setCreateType(true, "batabitoo.com") }
+
+                ChoiceCard(
+                    title = "حساب Gmail",
+                    subtitle = "@gmail.com",
+                    icon = Icons.Rounded.MailOutline,
+                    color = Color(0xFFEA4335),
+                    selected = state.createOfficial && state.createDomain == "gmail.com",
+                    modifier = Modifier.weight(1f)
+                ) { viewModel.setCreateType(true, "gmail.com") }
+
+                ChoiceCard(
+                    title = "بريد سريع",
+                    subtitle = "جاهز بلحظات",
+                    icon = Icons.Rounded.Bolt,
+                    color = Cyan,
+                    selected = !state.createOfficial,
+                    modifier = Modifier.weight(1f)
+                ) { viewModel.setCreateType(false) }
             }
-            Spacer(Modifier.height(10.dp))
-            val nextSequential = viewModel.getNextSequentialPrefix("ahmedroou")
-            androidx.compose.material3.Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable {
-                        viewModel.setCreateType(true)
-                        prefix = nextSequential
-                        if (name.isBlank() || name.startsWith("ahmedroou")) {
-                            name = nextSequential
-                        }
-                    },
-                color = Gold.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, Gold.copy(alpha = 0.35f)),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+            if (state.createOfficial && state.createDomain == "batabitoo.com") {
+                Spacer(Modifier.height(10.dp))
+                val nextSequential = viewModel.getNextSequentialPrefix("ahmedroou")
+                androidx.compose.material3.Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            viewModel.setCreateType(true, "batabitoo.com")
+                            prefix = nextSequential
+                            if (name.isBlank() || name.startsWith("ahmedroou")) {
+                                name = nextSequential
+                            }
+                        },
+                    color = Gold.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Gold.copy(alpha = 0.35f)),
                 ) {
                     Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(Gold.copy(alpha = 0.25f)),
-                            contentAlignment = Alignment.Center,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Icon(
-                                Icons.Rounded.Bolt,
-                                contentDescription = null,
-                                tint = Color(0xFFB67B18),
-                                modifier = Modifier.size(15.dp),
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(Gold.copy(alpha = 0.25f)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Bolt,
+                                    contentDescription = null,
+                                    tint = Color(0xFFB67B18),
+                                    modifier = Modifier.size(15.dp),
+                                )
+                            }
+                            Column {
+                                Text(
+                                    "بريد رسمي تتابعي (ahmedroou)",
+                                    color = Color(0xFF8C5D0B),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "انقر لتعبئة التالي تلقائيًا",
+                                    color = Muted,
+                                    fontSize = 10.sp,
+                                )
+                            }
                         }
-                        Column {
-                            Text(
-                                "بريد رسمي تتابعي (ahmedroou)",
-                                color = Color(0xFF8C5D0B),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                "انقر لتعبئة التالي تلقائيًا",
-                                color = Muted,
-                                fontSize = 10.sp,
-                            )
-                        }
+                        Text(
+                            nextSequential,
+                            color = Color(0xFF8C5D0B),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.85f))
+                                .padding(horizontal = 9.dp, vertical = 3.dp),
+                        )
                     }
-                    Text(
-                        nextSequential,
-                        color = Color(0xFF8C5D0B),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Black,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.White.copy(alpha = 0.85f))
-                            .padding(horizontal = 9.dp, vertical = 3.dp),
-                    )
                 }
             }
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("اسم الحساب") }, placeholder = { Text("مثال: حساب أمازون") }, singleLine = true, shape = RoundedCornerShape(17.dp))
             Spacer(Modifier.height(10.dp))
-            OutlinedTextField(value = prefix, onValueChange = { prefix = it.filter { char -> char.isLetterOrDigit() || char == '.' }.lowercase() }, modifier = Modifier.fillMaxWidth(), label = { Text("عنوان البريد") }, supportingText = { Text(if (state.createOfficial) "سيُضاف @batabitoo.com تلقائيًا" else "سيُختار نطاق سريع تلقائيًا") }, singleLine = true, shape = RoundedCornerShape(17.dp))
+            OutlinedTextField(
+                value = prefix,
+                onValueChange = { prefix = it.filter { char -> char.isLetterOrDigit() || char == '.' || char == '@' }.lowercase() },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("عنوان البريد") },
+                supportingText = {
+                    Text(
+                        if (state.createOfficial) {
+                            if (state.createDomain == "gmail.com") "سيُضاف @gmail.com تلقائيًا أو أدخل البريد كاملاً"
+                            else "سيُضاف @batabitoo.com تلقائيًا"
+                        } else "سيُختار نطاق سريع تلقائيًا"
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(17.dp)
+            )
             Spacer(Modifier.height(10.dp))
             Button(onClick = { viewModel.createInbox(name, prefix) }, enabled = !state.refreshing, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(18.dp)) {
                 if (state.refreshing) CircularProgressIndicator(Modifier.size(19.dp), strokeWidth = 2.dp, color = Color.White) else Icon(Icons.Rounded.Add, null)

@@ -121,7 +121,8 @@ object AmazonDetector {
     )
 
     fun isOfficialInbox(inbox: Inbox): Boolean {
-        return inbox.isOfficial || inbox.type == "official" || inbox.email.lowercase().endsWith("@batabitoo.com")
+        val em = inbox.email.lowercase()
+        return inbox.isOfficial || inbox.type == "official" || em.endsWith("@batabitoo.com") || em.endsWith("@gmail.com")
     }
 
     fun isAmazonMessage(message: MailMessage): Boolean {
@@ -397,7 +398,7 @@ object MailJson {
         val email = fields.optStringValue("email")
         val label = fields.optStringValue("label")
         val personName = fields.optStringValue("personName")
-        val official = fields.optBooleanValue("isOfficial") || fields.optStringValue("type") == "official" || email.endsWith("@batabitoo.com", true)
+        val official = fields.optBooleanValue("isOfficial") || fields.optStringValue("type") == "official" || email.endsWith("@batabitoo.com", true) || email.endsWith("@gmail.com", true)
         val banStatus = fields.optStringValue("banStatus").ifBlank { if (fields.optBooleanValue("isBanned")) "confirmed" else "none" }
         val isConfirmedBanned = official && (banStatus == "confirmed" || fields.optBooleanValue("isBanned"))
         val isSuspected = official && (banStatus == "suspected")
@@ -488,7 +489,7 @@ object MailJson {
             bodyStatus = fields.optStringValue("bodyStatus"),
             attachments = emptyList(),
             createdAt = fields.optStringValue("createdAt"),
-            isOfficial = fields.optBooleanValue("isOfficialDomain") || (if (inboxEmail.isNotBlank()) inboxEmail else to).endsWith("@batabitoo.com", true),
+            isOfficial = fields.optBooleanValue("isOfficialDomain") || (if (inboxEmail.isNotBlank()) inboxEmail else to).endsWith("@batabitoo.com", true) || (if (inboxEmail.isNotBlank()) inboxEmail else to).endsWith("@gmail.com", true),
         )
     }
 

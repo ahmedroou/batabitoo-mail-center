@@ -125,22 +125,22 @@ class InboxDatabase {
     return data.inboxes || [];
   }
 
-  // Get Official inboxes (@batabitoo.com)
+  // Get Official inboxes (@batabitoo.com and @gmail.com)
   getOfficialInboxes() {
     const inboxes = this.getAllInboxes();
-    return inboxes.filter(i => i.isOfficial === true || (i.email && i.email.toLowerCase().endsWith('@batabitoo.com')) || i.type === 'official');
+    return inboxes.filter(i => i.isOfficial === true || (i.email && (i.email.toLowerCase().endsWith('@batabitoo.com') || i.email.toLowerCase().endsWith('@gmail.com'))) || i.type === 'official');
   }
 
   // Get Temporary/Random inboxes
   getTempInboxes() {
     const inboxes = this.getAllInboxes();
-    return inboxes.filter(i => !(i.isOfficial === true || (i.email && i.email.toLowerCase().endsWith('@batabitoo.com')) || i.type === 'official'));
+    return inboxes.filter(i => !(i.isOfficial === true || (i.email && (i.email.toLowerCase().endsWith('@batabitoo.com') || i.email.toLowerCase().endsWith('@gmail.com'))) || i.type === 'official'));
   }
 
   isOfficialInbox(inbox) {
     if (!inbox) return false;
     const email = String(inbox.email || '').toLowerCase().trim();
-    return inbox.isOfficial === true || inbox.type === 'official' || email.endsWith('@batabitoo.com') || inbox.domain === 'batabitoo.com';
+    return inbox.isOfficial === true || inbox.type === 'official' || email.endsWith('@batabitoo.com') || email.endsWith('@gmail.com') || inbox.domain === 'batabitoo.com' || inbox.domain === 'gmail.com';
   }
 
   // Amazon detection helpers (Official inboxes only, O(1) skip for classified accounts)
@@ -352,13 +352,14 @@ class InboxDatabase {
       // Auto-register missing inbox record on-the-fly
       const isEmail = cleanDecoded.includes('@');
       const email = isEmail ? cleanDecoded : `${cleanDecoded}@batabitoo.com`;
-      const isOfficial = email.endsWith('@batabitoo.com');
+      const isOfficial = email.endsWith('@batabitoo.com') || email.endsWith('@gmail.com');
+      const domain = email.split('@')[1] || (isOfficial ? 'batabitoo.com' : 'temp');
 
       inbox = {
         id: rawId || (isEmail ? `inbox_${cleanDecoded.replace(/[^a-z0-9]/g, '_')}` : `official_${Date.now()}`),
         email: email,
-        domain: isOfficial ? 'batabitoo.com' : (email.split('@')[1] || 'temp'),
-        host: isOfficial ? 'batabitoo.com (Official Trusted)' : 'Temp Mail Service',
+        domain: domain,
+        host: isOfficial ? (domain === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)') : 'Temp Mail Service',
         isOfficial: isOfficial,
         type: isOfficial ? 'official' : 'temp',
         label: email.split('@')[0],
@@ -472,12 +473,13 @@ class InboxDatabase {
     if (!inbox) {
       const isEmail = clean.includes('@');
       const email = isEmail ? clean : `${clean}@batabitoo.com`;
-      const isOfficial = email.endsWith('@batabitoo.com');
+      const isOfficial = email.endsWith('@batabitoo.com') || email.endsWith('@gmail.com');
+      const domain = email.split('@')[1] || (isOfficial ? 'batabitoo.com' : 'temp');
       inbox = {
         id: isEmail ? `inbox_${clean.replace(/[^a-z0-9]/g, '_')}` : (clean || `official_${Date.now()}`),
         email: email,
-        domain: isOfficial ? 'batabitoo.com' : (email.split('@')[1] || 'temp'),
-        host: isOfficial ? 'batabitoo.com (Official Trusted)' : 'Temp Mail Service',
+        domain: domain,
+        host: isOfficial ? (domain === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)') : 'Temp Mail Service',
         isOfficial: isOfficial,
         type: isOfficial ? 'official' : 'temp',
         label: email.split('@')[0],
@@ -531,7 +533,7 @@ class InboxDatabase {
     return messages.filter(m => {
       if (!this.isAmazonMessage(m)) return false;
       const cleanEmail = String(m.inboxEmail || m.to || '').toLowerCase();
-      return cleanEmail.endsWith('@batabitoo.com') || m.isOfficialDomain === true;
+      return cleanEmail.endsWith('@batabitoo.com') || cleanEmail.endsWith('@gmail.com') || m.isOfficialDomain === true;
     });
   }
 
@@ -540,7 +542,7 @@ class InboxDatabase {
     return messages.filter(m => {
       if (!this.isBannedMessage(m)) return false;
       const cleanEmail = String(m.inboxEmail || m.to || '').toLowerCase();
-      return cleanEmail.endsWith('@batabitoo.com') || m.isOfficialDomain === true;
+      return cleanEmail.endsWith('@batabitoo.com') || cleanEmail.endsWith('@gmail.com') || m.isOfficialDomain === true;
     });
   }
 
@@ -566,7 +568,7 @@ class InboxDatabase {
 
   async saveInbox(inboxRecord) {
     const email = (inboxRecord.email || '').toLowerCase().trim();
-    const isOfficial = inboxRecord.isOfficial === true || email.endsWith('@batabitoo.com') || inboxRecord.domain === 'batabitoo.com';
+    const isOfficial = inboxRecord.isOfficial === true || email.endsWith('@batabitoo.com') || email.endsWith('@gmail.com') || inboxRecord.domain === 'batabitoo.com' || inboxRecord.domain === 'gmail.com';
     const type = isOfficial ? 'official' : 'temp';
 
     const cleanRecord = {
@@ -709,10 +711,10 @@ class InboxDatabase {
     const data = this.readLocal();
     const all = data.messages || [];
     if (filterType === 'official') {
-      return all.filter(m => m.isOfficialDomain === true || String(m.inboxEmail || '').toLowerCase().endsWith('@batabitoo.com'));
+      return all.filter(m => m.isOfficialDomain === true || String(m.inboxEmail || '').toLowerCase().endsWith('@batabitoo.com') || String(m.inboxEmail || '').toLowerCase().endsWith('@gmail.com'));
     }
     if (filterType === 'temp') {
-      return all.filter(m => !(m.isOfficialDomain === true || String(m.inboxEmail || '').toLowerCase().endsWith('@batabitoo.com')));
+      return all.filter(m => !(m.isOfficialDomain === true || String(m.inboxEmail || '').toLowerCase().endsWith('@batabitoo.com') || String(m.inboxEmail || '').toLowerCase().endsWith('@gmail.com')));
     }
     return all;
   }
@@ -986,10 +988,10 @@ class InboxDatabase {
   getAppVersion() {
     const data = this.readLocal();
     const defaultVersion = {
-      latestVersionCode: 7,
-      latestVersionName: "1.3.3",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.3.3/Batabitoo-Mail-Center-1.3.3.apk",
-      releaseNotes: "إصلاح خطأ تأكيد الحظر (Not Found)، وإعادة تصميم أزرار تصفية أمازون وبطاقات الحسابات لإظهار البريد كاملاً وتنظيم الأزرار بالأسفل.",
+      latestVersionCode: 9,
+      latestVersionName: "1.3.5",
+      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.5/Batabitoo-Mail-Center-1.3.5.apk",
+      releaseNotes: "دعم كامل لإضافة حسابات Gmail حقيقية ومعاملتها كحسابات رسمية لعمليات أمازون والحظر ورموز التحقق 24/7.",
       mandatory: false,
       updatedAt: new Date().toISOString()
     };

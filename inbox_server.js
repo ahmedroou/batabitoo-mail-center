@@ -181,7 +181,7 @@ const server = http.createServer(async (req, res) => {
       const recipient = emailParser.formatAddress(payload.recipient || payload['to-address'] || normalized.to || '');
       const toClean = (recipient.match(/<([^<>]+)>/)?.[1] || recipient.split(',')[0]).toLowerCase().trim();
       if (!/^[^\s<>@]+@[^\s<>@]+$/.test(toClean)) return sendJSON(400, { error: 'Missing or invalid recipient' });
-      const isOff = toClean.endsWith('@batabitoo.com');
+      const isOff = toClean.endsWith('@batabitoo.com') || toClean.endsWith('@gmail.com');
 
       const messageRecord = {
         ...normalized,
@@ -197,11 +197,12 @@ const server = http.createServer(async (req, res) => {
       const allInboxes = db.getAllInboxes();
       let targetInbox = allInboxes.find(i => i.email.toLowerCase() === toClean);
       if (!targetInbox) {
+        const dom = toClean.split('@')[1] || 'batabitoo.com';
         targetInbox = await db.saveInbox({
           id: `official_${Date.now()}`,
           email: toClean,
-          domain: toClean.split('@')[1] || 'batabitoo.com',
-          host: isOff ? 'batabitoo.com (Official Trusted)' : 'inboxes.com',
+          domain: dom,
+          host: isOff ? (dom === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)') : 'inboxes.com',
           label: isOff ? `رسمي (${toClean.split('@')[0]})` : toClean.split('@')[0],
           isOfficial: isOff,
           type: isOff ? 'official' : 'temp',
@@ -230,25 +231,36 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ============================================================
-    // 2. CREATE OFFICIAL BATABITOO.COM INBOX
+    // 2. CREATE OFFICIAL INBOX (@batabitoo.com or @gmail.com)
     // ============================================================
     if (url.pathname === '/api/official/create' && req.method === 'POST') {
       const payload = await parseBody();
-      const rawPrefix = (payload.prefix || '').toLowerCase().replace(/[^a-z0-9\.]/g, '');
-      const isExact = payload.exact === true || (rawPrefix.length > 0 && payload.random !== true);
-      const prefix = rawPrefix || 'amazon.acc';
-      const email = isExact
-        ? `${prefix}@batabitoo.com`.toLowerCase()
-        : `${prefix}${Math.floor(100 + Math.random() * 900)}@batabitoo.com`.toLowerCase();
-      const label = payload.label || payload.personName || `حساب رسمي (${prefix})`;
+      const reqDomain = (payload.domain || 'batabitoo.com').toLowerCase().trim();
+      const targetDomain = reqDomain.includes('gmail') ? 'gmail.com' : 'batabitoo.com';
+      const rawInput = (payload.email || payload.prefix || '').toLowerCase().trim();
+
+      let email = '';
+      if (rawInput.includes('@')) {
+        email = rawInput;
+      } else {
+        const rawPrefix = rawInput.replace(/[^a-z0-9\.]/g, '') || 'amazon.acc';
+        const isExact = payload.exact === true || (rawPrefix.length > 0 && payload.random !== true);
+        email = isExact
+          ? `${rawPrefix}@${targetDomain}`.toLowerCase()
+          : `${rawPrefix}${Math.floor(100 + Math.random() * 900)}@${targetDomain}`.toLowerCase();
+      }
+
+      const domain = email.split('@')[1] || targetDomain;
+      const isOfficial = email.endsWith('@batabitoo.com') || email.endsWith('@gmail.com');
+      const label = payload.label || payload.personName || `حساب رسمي (${email.split('@')[0]})`;
 
       const record = await db.saveInbox({
         id: `official_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         email: email,
-        domain: 'batabitoo.com',
-        host: 'batabitoo.com (Official Trusted)',
-        isOfficial: true,
-        type: 'official',
+        domain: domain,
+        host: domain === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)',
+        isOfficial: isOfficial,
+        type: isOfficial ? 'official' : 'temp',
         label: label,
         personName: payload.personName || label,
         createdAt: new Date().toISOString(),
