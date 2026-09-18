@@ -26,6 +26,7 @@ class RealInboxService {
     ];
 
     this.lastUsedDomainIndex = 0;
+    this.rapidApiKey = process.env.INBOXES_RAPIDAPI_KEY || 'aa0398df7bmshdabac4b4ce042d3p14e5d7jsnbccdde4b33bb';
   }
 
   request(url, options = {}, data = null) {
@@ -141,7 +142,37 @@ class RealInboxService {
   async getMessages(inbox) {
     if (!inbox || !inbox.email) return [];
 
-    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain)) {
+    const isMailTm = inbox.domain === 'emalupe.com' || inbox.domain === 'westcast-systems.com' || String(inbox.provider || '').includes('mail.tm') || String(inbox.provider || '').includes('mail.gw');
+    if (!isMailTm && (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain))) {
+      // 1. Try RapidAPI Official Endpoint First (Bypasses all IP bans & rate limits)
+      if (this.rapidApiKey) {
+        try {
+          const res = await this.request(`https://inboxes-com.p.rapidapi.com/inboxes/${encodeURIComponent(inbox.email)}`, {
+            headers: {
+              'x-rapidapi-key': this.rapidApiKey,
+              'x-rapidapi-host': 'inboxes-com.p.rapidapi.com'
+            }
+          });
+          if (Array.isArray(res)) {
+            return res.map(m => {
+              const senderRaw = m.from || '';
+              const senderAddress = (senderRaw.match(/<([^<>]+)>/)?.[1] || senderRaw).trim();
+              const senderName = senderRaw.split('<')[0].replace(/["']/g, '').trim() || senderAddress;
+              return {
+                id: m.uid,
+                from: { address: senderAddress, name: senderName },
+                to: [{ address: inbox.email }],
+                subject: m.subject || '(بدون عنوان)',
+                intro: m.subject || '',
+                createdAt: m.created_at || new Date().toISOString()
+              };
+            });
+          }
+        } catch (e) {
+          console.warn('⚠️ [RapidAPI] Fallback to web endpoint, error:', e.message);
+        }
+      }
+
       if (this.isRateLimited()) {
         const remainingSec = Math.ceil((this.rateLimitUntil - Date.now()) / 1000);
         console.warn(`⏳ [inboxes.com] Rate limit in effect. Cooldown remaining: ${remainingSec}s`);
@@ -209,7 +240,39 @@ class RealInboxService {
   async getMessage(inbox, messageId) {
     if (!inbox || !messageId) return null;
 
-    if (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain)) {
+    const isMailTm = inbox.domain === 'emalupe.com' || inbox.domain === 'westcast-systems.com' || String(inbox.provider || '').includes('mail.tm') || String(inbox.provider || '').includes('mail.gw');
+    if (!isMailTm && (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain))) {
+      // 1. Try RapidAPI First
+      if (this.rapidApiKey) {
+        try {
+          const res = await this.request(`https://inboxes-com.p.rapidapi.com/messages/${encodeURIComponent(messageId)}`, {
+            headers: {
+              'x-rapidapi-key': this.rapidApiKey,
+              'x-rapidapi-host': 'inboxes-com.p.rapidapi.com'
+            }
+          });
+          if (res && res.uid) {
+            const senderRaw = res.from || '';
+            const senderAddress = (senderRaw.match(/<([^<>]+)>/)?.[1] || senderRaw).trim();
+            const senderName = senderRaw.split('<')[0].replace(/["']/g, '').trim() || senderAddress;
+            return {
+              id: res.uid || messageId,
+              from: { address: senderAddress, name: senderName },
+              to: [{ address: inbox.email }],
+              subject: res.subject || '(بدون عنوان)',
+              intro: (res.text ? res.text.slice(0, 140).trim() : res.subject) || '',
+              text: res.text || '',
+              html: res.html || '',
+              raw: res.raw || '',
+              attachments: res.attachments || [],
+              createdAt: res.created_at || new Date().toISOString()
+            };
+          }
+        } catch (e) {
+          console.warn('⚠️ [RapidAPI] Error fetching message content:', e.message);
+        }
+      }
+
       if (this.isRateLimited()) {
         return null;
       }
