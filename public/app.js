@@ -380,14 +380,124 @@ function bindEvents() {
   });
 }
 
+function parseFirestoreDoc(doc) {
+  if (!doc || !doc.fields) return {};
+  const fields = doc.fields;
+  const res = {};
+  for (const key of Object.keys(fields)) {
+    const val = fields[key];
+    if (val.stringValue !== undefined) res[key] = val.stringValue;
+    else if (val.booleanValue !== undefined) res[key] = val.booleanValue;
+    else if (val.integerValue !== undefined) res[key] = parseInt(val.integerValue, 10);
+    else if (val.doubleValue !== undefined) res[key] = parseFloat(val.doubleValue);
+    else if (val.nullValue !== undefined) res[key] = null;
+    else if (val.arrayValue !== undefined) res[key] = (val.arrayValue.values || []).map(v => v.stringValue !== undefined ? v.stringValue : v.integerValue !== undefined ? parseInt(v.integerValue, 10) : v);
+    else if (val.mapValue !== undefined) res[key] = val.mapValue.fields;
+  }
+  const name = doc.name || '';
+  if (!res.id) res.id = name.split('/').pop() || '';
+  return res;
+}
+
+async function fetchFirestoreInboxes() {
+  const url = 'https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?pageSize=300';
+  const res = await fetch(url);
+  const data = await res.json();
+  const docs = data.documents || [];
+  const allList = docs.map(parseFirestoreDoc).filter(i => i.email);
+  const official = allList.filter(i => i.isOfficial || i.type === 'official' || (i.email && i.email.endsWith('@batabitoo.com')));
+  const temp = allList.filter(i => !official.includes(i));
+  const banned = allList.filter(i => (i.banStatus === 'confirmed' || i.isBanned) && (i.isOfficial || i.type === 'official'));
+  const suspected = allList.filter(i => i.banStatus === 'suspected' && (i.isOfficial || i.type === 'official'));
+  const amazon = allList.filter(i => (i.isAmazon || i.banStatus === 'confirmed' || i.banStatus === 'suspected') && (i.isOfficial || i.type === 'official'));
+  return {
+    activeId: official[0]?.id || temp[0]?.id || null,
+    official,
+    temp,
+    amazon,
+    banned,
+    suspected
+  };
+}
+
+async function fetchFirestoreMessages(type = null) {
+  const url = 'https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/messages?pageSize=300';
+  const res = await fetch(url);
+  const data = await res.json();
+  const docs = data.documents || [];
+  const msgList = docs.map(parseFirestoreDoc).filter(m => m.id);
+  const official = msgList.filter(m => m.isOfficialDomain || (m.inboxEmail || m.to || '').endsWith('@batabitoo.com'));
+  const temp = msgList.filter(m => !official.includes(m));
+  const banned = msgList.filter(m => m.isBanned);
+  const amazon = msgList.filter(m => m.isAmazon || m.isBanned);
+
+  let returned = msgList;
+  if (type === 'official') returned = official;
+  else if (type === 'temp') returned = temp;
+  else if (type === 'amazon') returned = amazon;
+  else if (type === 'banned') returned = banned;
+
+  return {
+    counts: {
+      total: msgList.length,
+      official: official.length,
+      temp: temp.length,
+      amazon: amazon.length,
+      banned: banned.length
+    },
+    official,
+    temp,
+    amazon,
+    banned,
+    messages: returned
+  };
+}
+
 async function api(path, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     const response = await fetch(API_BASE + path, { ...options, signal: controller.signal });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    return data;
+    if (response.ok) return data;
+    throw new Error(data.error || `HTTP ${response.status}`);
+  } catch (err) {
+    try {
+      if (path.startsWith('/api/inboxes')) {
+        return await fetchFirestoreInboxes();
+      }
+      if (path.startsWith('/api/all-messages')) {
+        const urlParams = new URLSearchParams(path.split('?')[1] || '');
+        const type = urlParams.get('type');
+        return await fetchFirestoreMessages(type);
+      }
+      if (path.startsWith('/api/inbox/current')) {
+        const [inboxes, messages] = await Promise.all([fetchFirestoreInboxes(), fetchFirestoreMessages()]);
+        const activeInbox = inboxes.official[0] || inboxes.temp[0] || null;
+        return { inbox: activeInbox, messages: messages.messages };
+      }
+      if (path.startsWith('/api/status')) {
+        const [inboxes, messages] = await Promise.all([fetchFirestoreInboxes(), fetchFirestoreMessages()]);
+        return {
+          status: 'online',
+          cloudConnected: true,
+          counts: {
+            totalInboxes: inboxes.official.length + inboxes.temp.length,
+            official: inboxes.official.length,
+            temp: inboxes.temp.length,
+            amazon: inboxes.amazon.length,
+            banned: inboxes.banned.length,
+            messages: messages.counts.total
+          }
+        };
+      }
+      if (path.startsWith('/api/nivea/logs')) {
+        return [];
+      }
+    } catch (fsErr) {
+      console.error('Firestore API fallback error:', fsErr);
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -398,7 +508,7 @@ async function refreshEverything() {
   state.loading = true;
   $('refresh-all').classList.add('spin');
   try {
-    await Promise.all([loadStatus(), loadInboxes(), loadCounts(), loadLogs(false)]);
+    await Promise.all([loadStatus(), loadInboxes(), loadCounts(), loadLogs(false).catch(() => [])]);
     if (state.view === 'current') await loadCurrent(true);
     else if (state.view === 'official' || state.view === 'temp' || state.view === 'amazon' || state.view === 'banned') await loadSeparated(state.view);
     else renderContent();
