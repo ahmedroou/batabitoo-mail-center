@@ -40,10 +40,16 @@ function sanitizeForFirestore(obj) {
   return clean;
 }
 
+
+const MANIFEST_CHUNK_SIZE = 100; // max inboxes or messages per Firestore chunk document
+
 class InboxDatabase {
   constructor() {
     this.db = null;
     this.isCloudConnected = false;
+    // Throttle: only rebuild manifests once every 30s to avoid burst writes
+    this._manifestPending = false;
+    this._manifestTimer = null;
     this.initFirebase();
     this.initLocal();
     this.scanAndClassifyAmazonInboxes().catch(() => {});
@@ -64,6 +70,144 @@ class InboxDatabase {
       if (this.storageCleanupInterval.unref) this.storageCleanupInterval.unref();
     }
   }
+
+  // ─── Chunked Manifest System ──────────────────────────────────────────────
+  // Rebuilds per-type chunked manifest documents in Firestore's `system/` path.
+  // Each chunk holds ≤100 items (inboxes or messages), sorted newest→oldest.
+  // Throttled: multiple calls within 30s are coalesced into one write.
+  //
+  // Firestore structure:
+  //   system/manifest_meta            → { official:{chunks,total}, temp:{chunks,total}, messages_official:{...}, messages_temp:{...}, updatedAt }
+  //   system/manifest_official_0      → { chunk:0, type:'official', inboxes:[...≤100], updatedAt }
+  //   system/manifest_temp_0          → { chunk:0, type:'temp', inboxes:[...≤100], updatedAt }
+  //   system/manifest_temp_1          → { chunk:1, type:'temp', inboxes:[...≤100], updatedAt }
+  //   system/manifest_messages_official_0 → { chunk:0, messages:[...≤100], updatedAt }
+  //   system/manifest_messages_temp_0     → { chunk:0, messages:[...≤100], updatedAt }
+
+  scheduleManifestUpdate() {
+    if (!this.isCloudConnected || !this.db) return;
+    if (this._manifestTimer) return; // already scheduled
+    this._manifestTimer = setTimeout(async () => {
+      this._manifestTimer = null;
+      await this.updateManifest().catch(e => console.warn('⚠️ [Manifest] Update failed:', e.message));
+    }, 30000); // 30-second debounce window
+    if (this._manifestTimer?.unref) this._manifestTimer.unref();
+  }
+
+  async updateManifest() {
+    if (!this.isCloudConnected || !this.db) return;
+    const now = new Date().toISOString();
+    const data = this.readLocal();
+    const allInboxes = data.inboxes || [];
+    const allMessages = data.messages || [];
+
+    // Helper: slim down inbox fields to essentials only (reduce doc size)
+    const slimInbox = i => ({
+      id: i.id,
+      email: i.email,
+      domain: i.domain,
+      label: i.label || i.personName || i.email?.split('@')[0] || '',
+      personName: i.personName || i.label || '',
+      isOfficial: i.isOfficial || false,
+      type: i.type || (i.isOfficial ? 'official' : 'temp'),
+      isAmazon: i.isAmazon || false,
+      isBanned: i.isBanned || false,
+      banStatus: i.banStatus || 'none',
+      banReason: i.banReason || '',
+      messageCount: i.messageCount || 0,
+      createdAt: i.createdAt || now,
+      isRealGmail: i.isRealGmail || false,
+      isDottedGmailAlias: i.isDottedGmailAlias || false,
+    });
+
+    // Helper: slim down message fields
+    const slimMsg = m => ({
+      id: m.id,
+      inboxEmail: m.inboxEmail || m.to || '',
+      from: m.from || '',
+      subject: m.subject || '',
+      intro: m.intro || '',
+      otp: m.otp || null,
+      isAmazon: m.isAmazon || false,
+      isBanned: m.isBanned || false,
+      isWinning: m.isWinning || false,
+      isOfficialDomain: m.isOfficialDomain || false,
+      createdAt: m.createdAt || now,
+    });
+
+    // Split inboxes by type, sort newest first
+    const officialInboxes = allInboxes
+      .filter(i => i.isOfficial || i.type === 'official' || (i.email || '').endsWith('@batabitoo.com') || (i.email || '').endsWith('@gmail.com'))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map(slimInbox);
+
+    const tempInboxes = allInboxes
+      .filter(i => !officialInboxes.find(o => o.id === i.id))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map(slimInbox);
+
+    // Split messages by type, sort newest first
+    const officialMessages = allMessages
+      .filter(m => m.isOfficialDomain || (m.inboxEmail || '').endsWith('@batabitoo.com') || (m.inboxEmail || '').endsWith('@gmail.com'))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map(slimMsg);
+
+    const tempMessages = allMessages
+      .filter(m => !officialMessages.find(o => o.id === m.id))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .map(slimMsg);
+
+    // Helper: chunk an array into groups of MANIFEST_CHUNK_SIZE
+    const chunkArray = (arr) => {
+      const chunks = [];
+      for (let i = 0; i < arr.length; i += MANIFEST_CHUNK_SIZE) {
+        chunks.push(arr.slice(i, i + MANIFEST_CHUNK_SIZE));
+      }
+      return chunks.length ? chunks : [[]];
+    };
+
+    const officialChunks  = chunkArray(officialInboxes);
+    const tempChunks      = chunkArray(tempInboxes);
+    const msgOffChunks    = chunkArray(officialMessages);
+    const msgTempChunks   = chunkArray(tempMessages);
+
+    // Build batch writes (Firestore batch max = 500 ops)
+    // We write meta + all chunks; typical total ops ≤ 20
+    const sysCol = this.db.collection('system');
+    const batch = this.db.batch();
+
+    // Meta document
+    batch.set(sysCol.doc('manifest_meta'), sanitizeForFirestore({
+      official:          { chunks: officialChunks.length,  total: officialInboxes.length },
+      temp:              { chunks: tempChunks.length,       total: tempInboxes.length },
+      messages_official: { chunks: msgOffChunks.length,    total: officialMessages.length },
+      messages_temp:     { chunks: msgTempChunks.length,   total: tempMessages.length },
+      totalInboxes:      allInboxes.length,
+      totalMessages:     allMessages.length,
+      updatedAt:         now,
+    }), { merge: true });
+
+    // Inbox chunk documents
+    officialChunks.forEach((chunk, idx) => {
+      batch.set(sysCol.doc(`manifest_official_${idx}`), sanitizeForFirestore({ chunk: idx, type: 'official', inboxes: chunk, updatedAt: now }));
+    });
+    tempChunks.forEach((chunk, idx) => {
+      batch.set(sysCol.doc(`manifest_temp_${idx}`), sanitizeForFirestore({ chunk: idx, type: 'temp', inboxes: chunk, updatedAt: now }));
+    });
+
+    // Message chunk documents
+    msgOffChunks.forEach((chunk, idx) => {
+      batch.set(sysCol.doc(`manifest_messages_official_${idx}`), sanitizeForFirestore({ chunk: idx, type: 'official', messages: chunk, updatedAt: now }));
+    });
+    msgTempChunks.forEach((chunk, idx) => {
+      batch.set(sysCol.doc(`manifest_messages_temp_${idx}`), sanitizeForFirestore({ chunk: idx, type: 'temp', messages: chunk, updatedAt: now }));
+    });
+
+    await batch.commit();
+    console.log(`☁️ [Manifest] Updated: ${officialInboxes.length} official (${officialChunks.length} chunks) + ${tempInboxes.length} temp (${tempChunks.length} chunks) + ${allMessages.length} messages`);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
 
   initFirebase() {
     if (process.env.MAIL_OFFLINE === '1') return;
@@ -288,29 +432,13 @@ class InboxDatabase {
 
     if (updatedCount > 0) {
       this.writeLocal(data);
-      if (this.isCloudConnected && this.db) {
-        try {
-          const batch = this.db.batch();
-          for (const inbox of newlyClassified) {
-            const inboxRef = this.db.collection('inboxes').doc(inbox.id);
-            batch.set(inboxRef, sanitizeForFirestore({
-              isAmazon: inbox.isAmazon,
-              isBanned: inbox.isBanned === true,
-              banStatus: inbox.banStatus || 'none',
-              banReason: inbox.banReason || null,
-              bannedDetectedAt: inbox.bannedDetectedAt || null,
-              amazonDetectedAt: inbox.amazonDetectedAt || null
-            }), { merge: true });
-          }
-          await batch.commit();
-        } catch (e) {
-          console.error('⚠️ Firestore batch classification error:', e.message);
-        }
-      }
+      // Schedule Chunked Manifest rebuild (throttled 30s) instead of writing individual docs
+      this.scheduleManifestUpdate();
     }
 
     return updatedCount;
   }
+
 
   getAmazonInboxes() {
     const official = this.getOfficialInboxes();
@@ -388,27 +516,13 @@ class InboxDatabase {
 
     this.writeLocal(data);
 
-    if (this.isCloudConnected && this.db) {
-      try {
-        await this.db.collection('inboxes').doc(inbox.id).set(sanitizeForFirestore({
-          id: inbox.id,
-          email: inbox.email,
-          isOfficial: inbox.isOfficial,
-          type: inbox.type,
-          isBanned: inbox.isBanned,
-          banStatus: inbox.banStatus,
-          banReason: inbox.banReason || null,
-          bannedConfirmedAt: inbox.bannedConfirmedAt || null,
-          banDismissedAt: inbox.banDismissedAt || null,
-          updatedAt: inbox.updatedAt
-        }), { merge: true });
-      } catch (e) {
-        console.error('⚠️ Firestore setInboxBanStatus error:', e.message);
-      }
-    }
+    // Schedule Chunked Manifest rebuild (throttled 30s) — no individual doc writes
+    this.scheduleManifestUpdate();
 
     return inbox;
   }
+
+
 
   async saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason }) {
     const data = this.readLocal();
@@ -597,17 +711,13 @@ class InboxDatabase {
     }
     this.writeLocal(data);
 
-    // 2. Sync to Cloud Firestore in background
-    if (this.isCloudConnected && this.db) {
-      try {
-        await this.db.collection('inboxes').doc(cleanRecord.id).set(sanitizeForFirestore(cleanRecord), { merge: true });
-      } catch (e) {
-        console.error('⚠️ Firestore saveInbox error:', e.message);
-      }
-    }
+    // 2. Schedule Chunked Manifest rebuild (throttled 30s) — no individual doc writes
+    this.scheduleManifestUpdate();
 
     return cleanRecord;
   }
+
+
 
   async saveMessages(inboxEmail, newMessages) {
     const cleanEmail = String(inboxEmail || '').toLowerCase().trim();
@@ -667,37 +777,14 @@ class InboxDatabase {
 
     if (changedMessages.length > 0) {
       this.writeLocal(data);
-
-      // Sync new or enriched messages to Cloud Firestore
-      if (this.isCloudConnected && this.db) {
-        try {
-          const batch = this.db.batch();
-          for (const msg of changedMessages) {
-            const docRef = this.db.collection('messages').doc(msg.id);
-            batch.set(docRef, sanitizeForFirestore(msg), { merge: true });
-          }
-          if (inbox) {
-            const inboxRef = this.db.collection('inboxes').doc(inbox.id);
-            batch.set(inboxRef, sanitizeForFirestore({
-              messageCount: inbox.messageCount,
-              lastCheckedAt: inbox.lastCheckedAt,
-              isAmazon: inbox.isAmazon,
-              isBanned: inbox.isBanned === true,
-              banStatus: inbox.banStatus || 'none',
-              banReason: inbox.banReason || null,
-              bannedDetectedAt: inbox.bannedDetectedAt || null,
-              amazonDetectedAt: inbox.amazonDetectedAt || null
-            }), { merge: true });
-          }
-          await batch.commit();
-        } catch (e) {
-          console.error('⚠️ Firestore saveMessages error:', e.message);
-        }
-      }
+      // Schedule Chunked Manifest rebuild (throttled 30s) — no individual doc writes needed
+      if (addedCount > 0) this.scheduleManifestUpdate();
     }
 
     return addedCount;
   }
+
+
 
   saveAllMessages(messages) {
     const data = this.readLocal();
@@ -749,25 +836,14 @@ class InboxDatabase {
     }
     this.writeLocal(data);
 
-    if (this.isCloudConnected && this.db) {
-      try {
-        await this.db.collection('inboxes').doc(inboxId).delete();
-        const snapshot = await this.db.collection('messages').where('inboxEmail', '==', inboxToDelete.email).get();
-        if (!snapshot.empty) {
-          const chunks = [];
-          for (let i = 0; i < snapshot.docs.length; i += 400) chunks.push(snapshot.docs.slice(i, i + 400));
-          for (const chunk of chunks) {
-            const batch = this.db.batch();
-            chunk.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
-          }
-        }
-      } catch (e) {
-        console.error('⚠️ Firestore deleteInbox error:', e.message);
-      }
-    }
+    // Rebuild Manifest immediately (no reads — manifest replaces all individual doc ops)
+    // This removes the inbox from the Chunked Manifest chunks automatically
+    this.scheduleManifestUpdate();
     return true;
   }
+
+
+
 
   // Storage Quota Protection, Retention Policy & Auto-Pruning
   async enforceStorageLimits() {
@@ -856,21 +932,10 @@ class InboxDatabase {
       }
       this.writeLocal(data);
 
-      if (this.isCloudConnected && this.db) {
-        try {
-          const batch = this.db.batch();
-          for (const id of removedMessageIds.slice(0, 450)) {
-            batch.delete(this.db.collection('messages').doc(id));
-          }
-          for (const id of deletedInboxIds.slice(0, 40)) {
-            batch.delete(this.db.collection('inboxes').doc(id));
-          }
-          await batch.commit();
-        } catch (e) {
-          console.error('⚠️ Firestore storage pruning cleanup error:', e.message);
-        }
-      }
+      // Rebuild manifest to reflect pruned data (no individual doc deletes needed)
+      this.scheduleManifestUpdate();
     }
+
 
     console.log(`✅ [Storage Manager] Complete: Pruned ${prunedMessagesCount} messages, freed ${(totalFreedDisk / (1024*1024)).toFixed(2)} MB, current disk: ${stats.totalMegabytes} MB.`);
     return {
