@@ -1,16 +1,66 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const RealInboxService = require('./RealInboxService');
 const db = require('./InboxDatabase');
 const emailParser = require('./EmailParser');
 const content = require('./MailContent');
 const gmailSync = require('./GmailSyncService');
 const tempSync = require('./TempSyncService');
+const niveaWinnerSync = require('./NiveaWinnerSyncWorker');
+const auth = require('./auth');
+const validators = require('./validators');
+
+process.on('uncaughtException', err => console.error('⚠️ [Uncaught Exception]:', err));
+process.on('unhandledRejection', reason => console.error('⚠️ [Unhandled Rejection]:', reason?.message || reason));
 
 const PORT = Number(process.env.PORT || 3030);
 const service = new RealInboxService();
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+// Allowed Origins Whitelist
+const ALLOWED_ORIGINS = new Set([
+  'http://localhost:3000',
+  'http://localhost:3030',
+  'http://localhost:8080',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3030',
+  'http://127.0.0.1:8080',
+  'https://batabitoo-mail-2026.web.app',
+  'https://batabitoo-mail-2026.firebaseapp.com',
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : [])
+]);
+
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  return false;
+}
+
+function sanitizeUrlForLog(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl, 'http://localhost');
+    for (const key of ['code', 'state', 'token', 'pin', 'password', 'key']) {
+      if (parsed.searchParams.has(key)) {
+        parsed.searchParams.set(key, '[REDACTED]');
+      }
+    }
+    return parsed.pathname + (parsed.search ? parsed.search : '');
+  } catch (_) {
+    return rawUrl.split('?')[0];
+  }
+}
+
+// OAuth state in-memory cache with 10-minute expiry
+const oauthStateCache = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [state, data] of oauthStateCache.entries()) {
+    if (data.expiresAt <= now) oauthStateCache.delete(state);
+  }
+}, 60000).unref();
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -43,25 +93,28 @@ async function cleanupExistingMessages() {
   }
 }
 
-// Global crash guards to keep the server running 24/7 without dying on network or Firestore hiccups
-process.on('uncaughtException', (err) => {
-  console.error('⚠️ [Guarded] Uncaught Exception:', err.message);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('⚠️ [Guarded] Unhandled Rejection:', reason);
-});
-
 const ready = cleanupExistingMessages().then(() => {
   gmailSync.startAll();
   tempSync.startAutoSync(3);
+  niveaWinnerSync.startScheduler();
 });
 
 const server = http.createServer(async (req, res) => {
   try {
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const safeUrlLog = sanitizeUrlForLog(req.url);
+    console.log(`📥 [REQ] ${req.method} ${safeUrlLog} (Host: ${req.headers.host})`);
+
+    // Strict Whitelisted CORS
+    const reqOrigin = req.headers.origin;
+    if (reqOrigin && isOriginAllowed(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else if (!reqOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Master-PIN, X-Session-Token');
+    res.setHeader('Access-Control-Max-Age', '86400');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -76,7 +129,26 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(data));
     };
 
-    const parseBody = () => {
+    // Server-Side PIN / Session Authentication Guard
+    if (url.pathname.startsWith('/api/')) {
+      const isPublicApi = url.pathname === '/api/health' || 
+                          (url.pathname === '/api/app/version' && req.method === 'GET') || 
+                          url.pathname === '/api/auth/login' ||
+                          url.pathname === '/api/auth/verify-pin';
+      if (!isPublicApi) {
+        const authResult = auth.authenticateRequest(req, url);
+        if (!authResult.ok) {
+          console.warn(`🔒 [401 BLOCKED] Unauthorized API access to ${url.pathname} (Host: ${req.headers.host})`);
+          return sendJSON(401, {
+            error: authResult.error || '🔒 الوصول مقفل من السيرفر. يلزم تسجيل الدخول بجلسة صالحة.',
+            code: 'AUTH_REQUIRED'
+          });
+        }
+      }
+    }
+
+    // Dynamic body parser: 2MB standard limit, 32MB allowed only for inbound emails
+    const parseBody = (maxBytes = (url.pathname === '/api/webhook/email' || url.pathname === '/api/inbound') ? 32 * 1024 * 1024 : 2 * 1024 * 1024) => {
       return new Promise((resolve, reject) => {
         const chunks = [];
         let size = 0;
@@ -84,15 +156,26 @@ const server = http.createServer(async (req, res) => {
         req.on('data', chunk => {
           if (oversized) return;
           size += chunk.length;
-          if (size > 32 * 1024 * 1024) { oversized = true; chunks.length = 0; reject(Object.assign(new Error('Message exceeds 32 MB'), { status: 413 })); return; }
+          if (size > maxBytes) {
+            oversized = true;
+            chunks.length = 0;
+            reject(Object.assign(new Error(`Payload exceeds limit of ${Math.round(maxBytes / (1024 * 1024))} MB`), { status: 413 }));
+            return;
+          }
           chunks.push(chunk);
         });
         req.on('end', () => {
           if (oversized) return;
           const buffer = Buffer.concat(chunks);
           if ((req.headers['content-type'] || '').includes('application/json')) {
-            try { resolve(JSON.parse(buffer.toString('utf8'))); } catch { reject(Object.assign(new Error('Invalid JSON'), { status: 400 })); }
-          } else resolve({ rawBase64: buffer.toString('base64') });
+            try {
+              resolve(JSON.parse(buffer.toString('utf8')));
+            } catch {
+              reject(Object.assign(new Error('Invalid JSON format'), { status: 400 }));
+            }
+          } else {
+            resolve({ rawBase64: buffer.toString('base64') });
+          }
         });
         req.on('error', reject);
       });
@@ -111,6 +194,55 @@ const server = http.createServer(async (req, res) => {
         res.end(fs.readFileSync(filePath));
         return;
       }
+    }
+
+    // ============================================================
+    // Session Authentication Endpoints
+    // ============================================================
+    if ((url.pathname === '/api/auth/login' || url.pathname === '/api/auth/verify-pin') && req.method === 'POST') {
+      const body = await parseBody().catch(() => ({}));
+      const val = validators.validateLoginPayload(body);
+      if (!val.valid) {
+        return sendJSON(400, { success: false, error: val.error });
+      }
+
+      if (auth.verifyPin(val.data.pin)) {
+        const session = auth.createSession({
+          userAgent: req.headers['user-agent'] || '',
+          ip: req.socket.remoteAddress || ''
+        });
+
+        res.setHeader('Set-Cookie', [
+          `batabitoo_session=${session.token}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly`,
+          `batabitoo_pin=authenticated; Path=/; Max-Age=2592000; SameSite=Lax`
+        ]);
+
+        return sendJSON(200, {
+          success: true,
+          token: session.token,
+          message: 'تم تسجيل الدخول بنجاح'
+        });
+      } else {
+        return sendJSON(401, { success: false, error: 'رمز الأمان غير صحيح' });
+      }
+    }
+
+    if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+      const cookies = auth.parseCookies(req.headers.cookie);
+      const token = (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null) || cookies['batabitoo_session'];
+      if (token) auth.revokeSession(token);
+
+      res.setHeader('Set-Cookie', [
+        `batabitoo_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax`,
+        `batabitoo_pin=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`
+      ]);
+
+      return sendJSON(200, { success: true, message: 'تم تسجيل الخروج بنجاح' });
+    }
+
+    if (url.pathname === '/api/auth/check' && req.method === 'GET') {
+      const authResult = auth.authenticateRequest(req, url);
+      return sendJSON(authResult.ok ? 200 : 401, { authenticated: authResult.ok });
     }
 
     // ============================================================
@@ -146,7 +278,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ============================================================
-    // App Version & Update Endpoints
+    // App Version & Update Endpoints (GET is public, POST requires auth)
     // ============================================================
     if (url.pathname === '/api/app/version' && req.method === 'GET') {
       const versionInfo = db.getAppVersion();
@@ -155,7 +287,11 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/app/version' && req.method === 'POST') {
       const payload = await parseBody();
-      const updated = await db.updateAppVersion(payload);
+      const val = validators.validateAppVersionPayload(payload);
+      if (!val.valid) {
+        return sendJSON(400, { success: false, error: val.error });
+      }
+      const updated = await db.updateAppVersion(val.data);
       return sendJSON(200, { success: true, version: updated });
     }
 
@@ -170,6 +306,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/storage/cleanup' && req.method === 'POST') {
       const result = await db.enforceStorageLimits();
       return sendJSON(200, { success: true, ...result });
+    }
+
+    // ============================================================
+    // Nivea 12-Hour Winner Sync Endpoints
+    // ============================================================
+    if (url.pathname === '/api/winners-sync/status' && req.method === 'GET') {
+      return sendJSON(200, niveaWinnerSync.getStatus());
+    }
+
+    if (url.pathname === '/api/winners-sync/trigger' && req.method === 'POST') {
+      niveaWinnerSync.runSync().catch(err => console.error('Triggered sync error:', err.message));
+      return sendJSON(200, { success: true, message: 'Scan started in background', status: niveaWinnerSync.getStatus() });
     }
 
     // ============================================================
@@ -321,25 +469,71 @@ const server = http.createServer(async (req, res) => {
       }
       const host = req.headers.host;
       const protocol = req.headers['x-forwarded-proto'] || 'http';
-      const redirectUri = config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline&prompt=consent`;
+      const clientRedirect = url.searchParams.get('redirect_uri');
+      const redirectUri = clientRedirect || config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
+      
+      const rawReturnTo = url.searchParams.get('return_to') || (host ? `${protocol}://${host}` : 'https://batabitoo-mail-2026.web.app');
+      const isAllowedReturn = rawReturnTo.startsWith('/') ||
+                              /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/.test(rawReturnTo) ||
+                              rawReturnTo.startsWith('https://batabitoo-mail-2026.web.app') ||
+                              rawReturnTo.startsWith('https://batabitoo-mail-2026.firebaseapp.com');
+      const returnTo = isAllowedReturn ? rawReturnTo : 'https://batabitoo-mail-2026.web.app';
+
+      // Generate cryptographically secure random state bound to memory cache (10 min expiry)
+      const stateParam = crypto.randomBytes(24).toString('hex');
+      oauthStateCache.set(stateParam, {
+        returnTo,
+        redirectUri,
+        expiresAt: Date.now() + 10 * 60 * 1000
+      });
+
+      const scopes = encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email');
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent&state=${encodeURIComponent(stateParam)}`;
       return sendJSON(200, { success: true, authUrl, redirectUri });
     }
 
-    if (url.pathname === '/api/gmail/oauth/callback' && req.method === 'GET') {
-      const code = url.searchParams.get('code');
-      const errParam = url.searchParams.get('error');
-      if (errParam) {
-        res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(errParam)}` });
+    if (url.pathname === '/api/gmail/oauth/callback' && (req.method === 'GET' || req.method === 'POST')) {
+      const payload = req.method === 'POST' ? await parseBody() : {};
+      const code = url.searchParams.get('code') || payload.code;
+      const errParam = url.searchParams.get('error') || payload.error;
+      const stateVal = url.searchParams.get('state') || payload.state || '';
+      const isAjax = req.headers.accept?.includes('application/json') || url.searchParams.get('format') === 'json' || req.method === 'POST';
+
+      const stateData = oauthStateCache.get(stateVal);
+      if (!stateData && stateVal) {
+        if (isAjax) return sendJSON(400, { success: false, error: 'رمز حالة OAuth غير صالح أو منتهي الصلاحية.' });
+        res.writeHead(302, { Location: `https://batabitoo-mail-2026.web.app/?gmail_error=${encodeURIComponent('حالة OAuth غير صالحة أو منتهية')}` });
         res.end();
         return;
       }
-      try {
-        const config = gmailSync.getOAuthConfig();
-        const host = req.headers.host;
-        const protocol = req.headers['x-forwarded-proto'] || 'http';
-        const redirectUri = config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
+      if (stateVal) {
+        oauthStateCache.delete(stateVal); // Single-use token
+      }
 
+      let returnTo = stateData?.returnTo || 'https://batabitoo-mail-2026.web.app';
+      let effectiveRedirectUri = stateData?.redirectUri || '';
+
+      const config = gmailSync.getOAuthConfig();
+      const host = req.headers.host;
+      const protocol = req.headers['x-forwarded-proto'] || 'http';
+      const redirectUri = payload.redirect_uri || url.searchParams.get('redirect_uri') || effectiveRedirectUri || config.redirectUri || `${protocol}://${host}/api/gmail/oauth/callback`;
+
+      if (errParam) {
+        if (isAjax) return sendJSON(400, { success: false, error: errParam });
+        res.writeHead(302, { Location: `${returnTo}/?gmail_error=${encodeURIComponent(errParam)}` });
+        res.end();
+        return;
+      }
+
+      if (!code) {
+        if (isAjax) return sendJSON(400, { success: false, error: 'رمز المصادقة (code) مفقود.' });
+        res.writeHead(302, { Location: `${returnTo}/?gmail_error=${encodeURIComponent('رمز المصادقة مفقود')}` });
+        res.end();
+        return;
+      }
+
+      try {
+        console.log(`🔑 [Gmail OAuth] Exchanging code for token with redirect_uri: ${redirectUri}`);
         const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -353,7 +547,10 @@ const server = http.createServer(async (req, res) => {
         });
         const tokenData = await tokenRes.json();
         if (!tokenData.access_token) {
-          res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(tokenData.error_description || 'فشل الحصول على تصريح جوجل')}` });
+          const errMsg = tokenData.error_description || tokenData.error || 'فشل الحصول على تصريح جوجل';
+          console.error('❌ [Gmail OAuth] Token exchange failed:', tokenData);
+          if (isAjax) return sendJSON(400, { success: false, error: errMsg });
+          res.writeHead(302, { Location: `${returnTo}/?gmail_error=${encodeURIComponent(errMsg)}` });
           res.end();
           return;
         }
@@ -364,18 +561,29 @@ const server = http.createServer(async (req, res) => {
         const userData = await userRes.json();
         const userEmail = userData.emailAddress;
 
-        await gmailSync.connectOAuth({
+        if (!userEmail) {
+          throw new Error('تعذر قراءة عنوان البريد الإلكتروني من حساب Google');
+        }
+
+        console.log(`✅ [Gmail OAuth] Successfully verified account: ${userEmail}`);
+        const connectRes = await gmailSync.connectOAuth({
           email: userEmail,
           refreshToken: tokenData.refresh_token,
           accessToken: tokenData.access_token,
           personName: userEmail.split('@')[0]
         });
 
-        res.writeHead(302, { Location: `/?gmail_connected=1&email=${encodeURIComponent(userEmail)}` });
+        if (isAjax) {
+          return sendJSON(200, { success: true, email: userEmail, inbox: connectRes.inbox });
+        }
+
+        res.writeHead(302, { Location: `${returnTo}/?gmail_connected=1&email=${encodeURIComponent(userEmail)}` });
         res.end();
         return;
       } catch (e) {
-        res.writeHead(302, { Location: `/?gmail_error=${encodeURIComponent(e.message)}` });
+        console.error('❌ [Gmail OAuth] Callback handler error:', e.message);
+        if (isAjax) return sendJSON(400, { success: false, error: e.message });
+        res.writeHead(302, { Location: `${returnTo}/?gmail_error=${encodeURIComponent(e.message)}` });
         res.end();
         return;
       }
@@ -398,6 +606,68 @@ const server = http.createServer(async (req, res) => {
         redirectUri: payload.redirectUri || ''
       });
       return sendJSON(200, { success: true });
+    }
+
+    // ============================================================
+    // 2.2 POST /api/gmail/oauth/save — Save Gmail account from frontend OAuth
+    // Called by the frontend after a successful Google OAuth to persist the account
+    // in the local database so it survives page reloads.
+    // ============================================================
+    if (url.pathname === '/api/gmail/oauth/save' && req.method === 'POST') {
+      const payload = await parseBody();
+      const cleanEmail = String(payload.email || '').trim().toLowerCase();
+      if (!cleanEmail.endsWith('@gmail.com')) {
+        return sendJSON(400, { success: false, error: 'Invalid Gmail address' });
+      }
+      const cleanName = payload.personName || cleanEmail.split('@')[0];
+      const docId = payload.docId || `gmail_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+      try {
+        const inboxRecord = {
+          id: docId,
+          email: cleanEmail,
+          domain: 'gmail.com',
+          host: 'Gmail (Google Official Real)',
+          isOfficial: true,
+          type: 'official',
+          label: cleanName,
+          personName: cleanName,
+          isRealGmail: true,
+          gmailAuthType: 'oauth2',
+          createdAt: new Date().toISOString(),
+          messageCount: 0
+        };
+        await db.saveInbox(inboxRecord);
+
+        // Also update gmail_connections.json if accessToken provided
+        if (payload.accessToken || payload.refreshToken) {
+          const accounts = gmailSync.loadAccounts();
+          const idx = accounts.findIndex(a => a.email === cleanEmail);
+          const accData = {
+            email: cleanEmail,
+            accessToken: payload.accessToken || null,
+            refreshToken: payload.refreshToken || null,
+            personName: cleanName,
+            authType: 'oauth2',
+            connectedAt: new Date().toISOString(),
+            lastSyncAt: new Date().toISOString(),
+            status: 'connected',
+            lastError: null,
+            syncedCount: 0
+          };
+          if (idx >= 0) {
+            accounts[idx] = { ...accounts[idx], ...accData };
+          } else {
+            accounts.push(accData);
+          }
+          gmailSync.saveAccounts(accounts);
+        }
+
+        console.log(`✅ [Gmail Save] Saved Gmail account from OAuth: ${cleanEmail}`);
+        return sendJSON(200, { success: true, inbox: inboxRecord });
+      } catch (err) {
+        console.error('❌ [Gmail Save] Error:', err.message);
+        return sendJSON(500, { success: false, error: err.message });
+      }
     }
 
     // ============================================================
@@ -447,8 +717,9 @@ const server = http.createServer(async (req, res) => {
       const targetId = payload?.id || payload?.inboxId || payload?.email;
       const status = payload?.banStatus || payload?.status || (payload?.verdict === 'reject' ? 'safe' : 'confirmed');
       const reason = payload?.reason || '';
-      if (!targetId) return sendJSON(400, { error: 'Missing inbox id or email' });
-      const updated = await db.setInboxBanStatus(targetId, status, reason);
+      const val = validators.validateBanStatusPayload({ inboxId: targetId, status, reason });
+      if (!val.valid) return sendJSON(400, { success: false, error: val.error });
+      const updated = await db.setInboxBanStatus(val.data.inboxId, val.data.status, val.data.reason);
       return sendJSON(200, { success: true, inbox: updated });
     }
 
@@ -644,8 +915,10 @@ const server = http.createServer(async (req, res) => {
     // ============================================================
     if (url.pathname === '/api/nivea/log-registration' && req.method === 'POST') {
       const payload = await parseBody();
+      const val = validators.validateNiveaLogPayload(payload);
+      if (!val.valid) return sendJSON(400, { success: false, error: val.error });
       try {
-        const result = await db.saveNiveaSubmission(payload);
+        const result = await db.saveNiveaSubmission(val.data);
         return sendJSON(200, { success: true, entry: result.entry, total: result.total });
       } catch(err) {
         return sendJSON(500, { error: err.message });

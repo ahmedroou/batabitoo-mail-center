@@ -121,7 +121,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.batabitoo.mailcenter.AmazonTab
+import com.batabitoo.mailcenter.AmazonDomainFilter
 import com.batabitoo.mailcenter.InboxFilter
+import com.batabitoo.mailcenter.OfficialSubFilter
 import com.batabitoo.mailcenter.MailUiState
 import com.batabitoo.mailcenter.MailViewModel
 import com.batabitoo.mailcenter.MainSection
@@ -196,6 +198,7 @@ fun MailCenterApp(viewModel: MailViewModel = viewModel()) {
     }
 
     if (state.showCreate) CreateInboxSheet(state, viewModel)
+    if (state.showDottedDialog) DottedGmailDialog(state, viewModel)
     state.selectedMessage?.let { EmailReader(it, state.baseUrl, state.messageLoading, state.messageError, { viewModel.openMessage(it) }, viewModel::closeMessage) }
     val appUpdate = state.appUpdate
     if (state.showUpdateDialog && appUpdate != null) {
@@ -305,7 +308,11 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
     val context = LocalContext.current
     var deleteTarget by remember { mutableStateOf<Inbox?>(null) }
     val source = when (state.inboxFilter) {
-        InboxFilter.OFFICIAL -> state.officialInboxes
+        InboxFilter.OFFICIAL -> when (state.officialSubFilter) {
+            OfficialSubFilter.ALL -> state.officialInboxes
+            OfficialSubFilter.BATABITOO -> state.officialInboxes.filter { it.isBatabitooDomain }
+            OfficialSubFilter.GMAIL -> state.officialInboxes.filter { it.isGmailDomain }
+        }
         InboxFilter.TEMP -> state.tempInboxes
     }
     val query = state.search.trim()
@@ -357,6 +364,37 @@ private fun InboxesScreen(state: MailUiState, viewModel: MailViewModel) {
                 ),
                 state.inboxFilter.ordinal,
             ) { viewModel.setInboxFilter(InboxFilter.entries[it]) }
+
+            if (state.inboxFilter == InboxFilter.OFFICIAL) {
+                val offAll = state.officialInboxes.size
+                val offBatabitoo = state.officialInboxes.count { it.isBatabitooDomain }
+                val offGmail = state.officialInboxes.count { it.isGmailDomain }
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    CompactSubChip(
+                        label = "كل الرسمي",
+                        count = offAll,
+                        selected = state.officialSubFilter == OfficialSubFilter.ALL,
+                        onClick = { viewModel.setOfficialSubFilter(OfficialSubFilter.ALL) }
+                    )
+                    CompactSubChip(
+                        label = "🏢 بطابيطو",
+                        count = offBatabitoo,
+                        selected = state.officialSubFilter == OfficialSubFilter.BATABITOO,
+                        onClick = { viewModel.setOfficialSubFilter(OfficialSubFilter.BATABITOO) }
+                    )
+                    CompactSubChip(
+                        label = "🔴 Gmail",
+                        count = offGmail,
+                        selected = state.officialSubFilter == OfficialSubFilter.GMAIL,
+                        onClick = { viewModel.setOfficialSubFilter(OfficialSubFilter.GMAIL) }
+                    )
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
             SearchField(state.search, "ابحث بالاسم أو البريد...", viewModel::setSearch)
             Spacer(Modifier.height(2.dp))
@@ -764,6 +802,18 @@ private fun InboxRow(
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
+                        if (inbox.isRealGmail || inbox.domain == "gmail.com") {
+                            Text(
+                                if (inbox.isDottedGmailAlias) "🔵 فرع نقطي" else "🔴 Gmail",
+                                color = if (inbox.isDottedGmailAlias) Color(0xFF1D4ED8) else Color(0xFFDC2626),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (inbox.isDottedGmailAlias) Color(0xFFDBEAFE) else Color(0xFFFEE2E2))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
                     }
                 }
 
@@ -875,6 +925,7 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 nextAccount = viewModel.getNextSequentialPrefix(),
                 refreshing = state.refreshing,
                 onCreate = { viewModel.createSequentialInbox() },
+                onAddDotted = { viewModel.setShowDottedDialog(true) },
                 onRefresh = { viewModel.refreshAll() },
                 onBack = { viewModel.setSection(MainSection.INBOXES) },
             )
@@ -920,6 +971,36 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 if (state.amazonTab == AmazonTab.MESSAGES) "ابحث في رسائل وأكواد أمازون..." else "ابحث في حسابات أمازون...",
                 viewModel::setSearch,
             )
+
+            if (state.amazonTab != AmazonTab.MESSAGES) {
+                val amzAll = allAmazonInboxes.size
+                val amzBatabitoo = allAmazonInboxes.count { it.isBatabitooDomain }
+                val amzGmail = allAmazonInboxes.count { it.isGmailDomain }
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    CompactSubChip(
+                        label = "كل النطاقات",
+                        count = amzAll,
+                        selected = state.amazonDomainFilter == AmazonDomainFilter.ALL,
+                        onClick = { viewModel.setAmazonDomainFilter(AmazonDomainFilter.ALL) }
+                    )
+                    CompactSubChip(
+                        label = "🏢 أمازون بطابيطو",
+                        count = amzBatabitoo,
+                        selected = state.amazonDomainFilter == AmazonDomainFilter.BATABITOO,
+                        onClick = { viewModel.setAmazonDomainFilter(AmazonDomainFilter.BATABITOO) }
+                    )
+                    CompactSubChip(
+                        label = "🔵 أمازون Gmail والنقاط",
+                        count = amzGmail,
+                        selected = state.amazonDomainFilter == AmazonDomainFilter.GMAIL,
+                        onClick = { viewModel.setAmazonDomainFilter(AmazonDomainFilter.GMAIL) }
+                    )
+                }
+            }
             Spacer(Modifier.height(2.dp))
         }
 
@@ -949,7 +1030,12 @@ private fun AmazonScreen(state: MailUiState, viewModel: MailViewModel) {
                 AmazonTab.HEALTHY -> healthyAmazonInboxes
                 AmazonTab.MESSAGES -> emptyList()
             }
-            val filteredInboxes = baseList.filter {
+            val domainFilteredList = when (state.amazonDomainFilter) {
+                AmazonDomainFilter.ALL -> baseList
+                AmazonDomainFilter.BATABITOO -> baseList.filter { it.isBatabitooDomain }
+                AmazonDomainFilter.GMAIL -> baseList.filter { it.isGmailDomain }
+            }
+            val filteredInboxes = domainFilteredList.filter {
                 query.isBlank() || listOf(it.email, it.personName, it.label, it.banReason).any { value -> value.contains(query, true) }
             }
             if (filteredInboxes.isEmpty()) {
@@ -998,6 +1084,7 @@ private fun AmazonUniverseHero(
     nextAccount: String,
     refreshing: Boolean,
     onCreate: () -> Unit,
+    onAddDotted: () -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit = {},
 ) {
@@ -1127,7 +1214,7 @@ private fun AmazonUniverseHero(
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Button(
                         onClick = onCreate,
@@ -1138,11 +1225,24 @@ private fun AmazonUniverseHero(
                             containerColor = Color(0xFFFF9900),
                             contentColor = Color(0xFF131921),
                         ),
-                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
                         Text("إنشاء $nextAccount", fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                    }
+                    Button(
+                        onClick = onAddDotted,
+                        enabled = !refreshing,
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF2563EB),
+                            contentColor = Color.White,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Text("+ تفريع نقطي", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                     OutlinedButton(
                         onClick = onRefresh,
@@ -1151,6 +1251,7 @@ private fun AmazonUniverseHero(
                         shape = RoundedCornerShape(14.dp),
                         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                     ) {
                         if (refreshing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                         else Icon(Icons.Rounded.Refresh, contentDescription = "تحديث حسابات أمازون", modifier = Modifier.size(18.dp))
@@ -1417,6 +1518,29 @@ private fun AmazonAccountCard(
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             )
                         }
+                        if (inbox.isDottedGmailAlias) {
+                            Text(
+                                text = "🔵 فرع نقطي",
+                                color = Color(0xFF1D4ED8),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFDBEAFE))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        } else if (inbox.isRealGmail || inbox.domain == "gmail.com") {
+                            Text(
+                                text = "📧 Gmail",
+                                color = Color(0xFFDC2626),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFFEE2E2))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
                     }
                 }
 
@@ -1452,6 +1576,15 @@ private fun AmazonAccountCard(
                         softWrap = true,
                     )
                 }
+            }
+
+            if (inbox.isDottedGmailAlias && inbox.parentEmail.isNotBlank()) {
+                Text(
+                    text = "مرتبط بالحساب المضيف: ${inbox.parentEmail}",
+                    color = Muted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
             }
 
             // 3. Suspected Ban Prompt if needed
@@ -2333,17 +2466,27 @@ private fun InAppUpdateDialog(
                         coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                             try {
                                 val url = java.net.URL(update.downloadUrl)
+                                val host = url.host.lowercase()
+                                val isTrustedHost = host == "github.com" || host.endsWith(".github.com") || host.endsWith(".githubusercontent.com") || host == "batabitoo.com" || host.endsWith(".batabitoo.com")
+                                if (!isTrustedHost || url.protocol != "https") {
+                                    throw SecurityException("رابط التحديث غير موثوق أو غير مشفر.")
+                                }
+
                                 val connection = url.openConnection() as java.net.HttpURLConnection
+                                connection.connectTimeout = 15000
+                                connection.readTimeout = 30000
                                 connection.connect()
                                 val fileLength = connection.contentLength
-                                val input = java.io.BufferedInputStream(url.openStream())
+                                val input = java.io.BufferedInputStream(connection.inputStream)
                                 val file = java.io.File(context.externalCacheDir ?: context.cacheDir, "update_v${update.latestVersionCode}.apk")
                                 val output = java.io.FileOutputStream(file)
-                                val data = ByteArray(1024)
+                                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                                val data = ByteArray(4096)
                                 var total: Long = 0
                                 var count: Int
                                 while (input.read(data).also { count = it } != -1) {
                                     total += count.toLong()
+                                    digest.update(data, 0, count)
                                     if (fileLength > 0) {
                                         progress = (total * 100 / fileLength).toFloat() / 100f
                                     }
@@ -2352,6 +2495,14 @@ private fun InAppUpdateDialog(
                                 output.flush()
                                 output.close()
                                 input.close()
+
+                                val computedHash = digest.digest().joinToString("") { "%02x".format(it) }
+                                if (!update.sha256.isNullOrBlank()) {
+                                    if (!computedHash.equals(update.sha256.trim(), ignoreCase = true)) {
+                                        file.delete()
+                                        throw SecurityException("فشل التحقق من أمان التحديث (عدم تطابق بصمة SHA-256).")
+                                    }
+                                }
 
                                 val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
                                 val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -2365,7 +2516,7 @@ private fun InAppUpdateDialog(
                                 }
                             } catch (e: Exception) {
                                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                    android.widget.Toast.makeText(context, "فشل التحميل: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, "فشل التحميل: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                                     downloading = false
                                 }
                             }
@@ -2601,49 +2752,223 @@ private fun ChoiceCard(title: String, subtitle: String, icon: androidx.compose.u
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MessageSheet(message: MailMessage, onDismiss: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
-    val contentToRender = if (message.html.isNotBlank()) {
-        message.html
-    } else {
-        "<!doctype html><html dir=\"auto\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{font-family:sans-serif;line-height:1.8;padding:16px;color:#182032;white-space:pre-wrap;overflow-wrap:anywhere;}</style></head><body>${message.text.ifBlank { "لا يوجد محتوى للرسالة." }}</body></html>"
-    }
-
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface, shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp), modifier = Modifier.fillMaxHeight(.95f)) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-            Text("تفاصيل الرسالة", color = Primary, style = MaterialTheme.typography.labelMedium)
-            Text(message.subject.ifBlank { "(بدون عنوان)" }, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(12.dp))
-            MetaLine("من", message.from.ifBlank { "غير معروف" }); MetaLine("إلى", message.to.ifBlank { message.inboxEmail }); MetaLine("التاريخ", formatDate(message.createdAt, true))
-            AnimatedVisibility(message.otp.isNotBlank()) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp).clip(RoundedCornerShape(19.dp)).background(Green.copy(alpha = .11f)).clickable { clipboard.setText(AnnotatedString(message.otp)) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("رمز التحقق · اضغط للنسخ", color = Green, style = MaterialTheme.typography.labelSmall); Text(message.otp, color = Color(0xFF087855), fontSize = 26.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp) }
-                    Icon(Icons.Rounded.ContentCopy, "نسخ", tint = Green)
-                }
+private fun CompactSubChip(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) Ink else Surface,
+        border = BorderStroke(1.dp, if (selected) Ink else CardBorderSubtle),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) Color.White else Ink,
+            )
+            Surface(
+                shape = CircleShape,
+                color = if (selected) Color.White.copy(alpha = 0.22f) else SurfaceSoft,
+            ) {
+                Text(
+                    text = arabicNumber(count),
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selected) Color.White else Muted,
+                )
             }
-            Spacer(Modifier.height(9.dp))
-            Card(Modifier.fillMaxWidth().weight(1f), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Color(0xFFE8EBF2))) {
-                HtmlMessage(contentToRender)
-            }
-            Spacer(Modifier.height(18.dp))
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MetaLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top) { Text(label, color = Muted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(55.dp)); SelectionContainer { Text(value.ifBlank { "—" }, color = Ink, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis) } }
-}
+private fun DottedGmailDialog(state: MailUiState, viewModel: MailViewModel) {
+    val existingGmails = remember(state.officialInboxes) {
+        state.officialInboxes
+            .filter { it.isRealGmail || it.email.endsWith("@gmail.com", true) }
+            .map { it.parentEmail.ifBlank { it.email } }
+            .distinct()
+    }
+    var parentEmail by rememberSaveable {
+        mutableStateOf(existingGmails.firstOrNull() ?: "ahmedroou1122@gmail.com")
+    }
+    var selectedVariant by rememberSaveable { mutableStateOf("") }
+    var label by rememberSaveable { mutableStateOf("") }
+    val variants = remember(parentEmail) {
+        viewModel.generateDottedVariants(parentEmail)
+    }
 
-@Composable
-private fun HtmlMessage(content: String) {
-    AndroidView(
-        factory = { context -> WebView(context).apply { settings.javaScriptEnabled = false; settings.domStorageEnabled = false; settings.allowFileAccess = false; settings.allowContentAccess = false; settings.loadWithOverviewMode = true; settings.useWideViewPort = true; webViewClient = WebViewClient() } },
-        update = { webView -> if (webView.tag != content.hashCode()) { webView.tag = content.hashCode(); webView.loadDataWithBaseURL(null, content, "text/html", "UTF-8", null) } },
-        modifier = Modifier.fillMaxSize(),
-    )
+    LaunchedEffect(variants) {
+        if (selectedVariant.isBlank() || !variants.contains(selectedVariant)) {
+            selectedVariant = variants.firstOrNull().orEmpty()
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.setShowDottedDialog(false) },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF2563EB).copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("🔵", fontSize = 16.sp)
+                }
+                Column {
+                    Text("تفريع نقطي لحساب أمازون على Gmail", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("توليد وتخصيص حساب أمازون مستقل ببريد نقطي", color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            Text(
+                "يتيح لك نظام Gmail استقبال كل الرسائل على نفس الحساب الأساسي مع تمييز كامل لحساب أمازون من حيث الحظر والطلبات والرموز.",
+                color = Ink.copy(alpha = 0.8f),
+                style = MaterialTheme.typography.bodySmall,
+                lineHeight = 18.sp,
+            )
+
+            if (existingGmails.isNotEmpty()) {
+                Text("اختر الحساب المضيف الأساسي:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    existingGmails.forEach { gm ->
+                        Surface(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { parentEmail = gm },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (parentEmail.equals(gm, true)) Color(0xFF2563EB) else SurfaceSoft,
+                        ) {
+                            Text(
+                                gm,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                color = if (parentEmail.equals(gm, true)) Color.White else Ink,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = parentEmail,
+                onValueChange = { parentEmail = it.trim().lowercase() },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("عنوان Gmail الأصلي") },
+                placeholder = { Text("example@gmail.com") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            if (variants.isNotEmpty()) {
+                Text("التفريعات النقطية المقترحة (انقر للاختيار):", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    variants.take(6).forEach { variant ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { selectedVariant = variant },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selectedVariant == variant) Color(0xFF2563EB).copy(alpha = 0.12f) else SurfaceSoft,
+                            border = BorderStroke(1.dp, if (selectedVariant == variant) Color(0xFF2563EB) else CardBorderSubtle),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    variant,
+                                    color = if (selectedVariant == variant) Color(0xFF1D4ED8) else Ink,
+                                    fontWeight = if (selectedVariant == variant) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 13.sp,
+                                )
+                                if (selectedVariant == variant) {
+                                    Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = selectedVariant,
+                onValueChange = { selectedVariant = it.trim().lowercase() },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("البريد النقطي المعتمد") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            OutlinedTextField(
+                value = label,
+                onValueChange = { label = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("تسمية الحساب (اختياري)") },
+                placeholder = { Text("مثال: حساب أمازون رقم 2") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            Button(
+                onClick = {
+                    if (selectedVariant.isNotBlank() && selectedVariant.contains("@gmail.com")) {
+                        viewModel.createDottedGmail(parentEmail, selectedVariant, label)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2563EB),
+                    contentColor = Color.White,
+                ),
+                enabled = selectedVariant.isNotBlank() && !state.refreshing,
+            ) {
+                if (state.refreshing) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                } else {
+                    Text("اعتماد الحساب في مركز أمازون", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 }
 
 @Composable

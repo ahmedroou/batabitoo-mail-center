@@ -326,6 +326,29 @@ class GmailSyncService {
         const parsed = await simpleParser(message.source);
         const msgId = `gmail_${email.replace(/[^a-z0-9]/g, '_')}_${message.uid}_${Date.now()}`;
 
+        // Look for Delivered-To header, or To header preserving dots
+        let deliveredTo = '';
+        if (parsed.headers) {
+          const dTo = parsed.headers.get('delivered-to');
+          if (dTo) {
+            deliveredTo = typeof dTo === 'string' ? dTo : (dTo.text || dTo.value || '');
+          }
+        }
+        const toAddress = parsed.to?.value?.[0]?.address || parsed.to?.text || '';
+
+        const cleanStr = str => {
+          if (!str) return '';
+          const mAngle = String(str).match(/<([^>]+)>/);
+          if (mAngle) return mAngle[1].trim().toLowerCase();
+          const mPlain = String(str).match(/[a-zA-Z0-9_\.\+\-]+@[a-zA-Z0-9_\.\-]+\.[a-zA-Z]{2,}/);
+          return mPlain ? mPlain[0].trim().toLowerCase() : String(str).trim().toLowerCase();
+        };
+
+        const deliveredClean = cleanStr(deliveredTo);
+        const toClean = cleanStr(toAddress);
+        const exactRecipient = (deliveredClean && deliveredClean.endsWith('@gmail.com')) ? deliveredClean : (toClean && toClean.endsWith('@gmail.com') ? toClean : email.toLowerCase().trim());
+        const isDotted = exactRecipient !== email.toLowerCase().trim();
+
         const fromAddress = parsed.from?.value?.[0]?.address || parsed.from?.text || 'unknown';
         const fromName = parsed.from?.value?.[0]?.name || parsed.from?.text || fromAddress;
         const subject = parsed.subject || '(بدون موضوع)';
@@ -335,7 +358,7 @@ class GmailSyncService {
         const rawPayload = {
           id: msgId,
           from: { address: fromAddress, name: fromName },
-          to: [{ address: email }],
+          to: [{ address: exactRecipient }],
           subject: subject,
           text: textContent,
           html: htmlContent,
@@ -348,17 +371,40 @@ class GmailSyncService {
         const messageRecord = {
           ...normalized,
           id: msgId,
-          to: email,
-          inboxEmail: email,
+          to: exactRecipient,
+          inboxEmail: exactRecipient,
+          exactRecipient: exactRecipient,
+          parentEmail: email,
           isOfficialDomain: true,
           domain: 'gmail.com',
           isRealGmail: true,
+          isDottedGmailAlias: isDotted,
           gmailUid: message.uid,
           createdAt: rawPayload.createdAt
         };
 
+        if (isDotted && exactRecipient.endsWith('@gmail.com')) {
+          const dottedInboxId = `gmail_amz_${exactRecipient.replace(/[^a-z0-9]/g, '_')}`;
+          await db.saveInbox({
+            id: dottedInboxId,
+            email: exactRecipient,
+            domain: 'gmail.com',
+            host: 'Gmail (Dotted Alias)',
+            isOfficial: true,
+            isAmazon: true,
+            isDottedGmailAlias: true,
+            parentEmail: email,
+            banStatus: 'none',
+            isBanned: false,
+            type: 'official',
+            label: exactRecipient.split('@')[0],
+            personName: exactRecipient.split('@')[0],
+            createdAt: new Date().toISOString()
+          }).catch(() => {});
+        }
+
         messagesToSave.push(messageRecord);
-        console.log(`✅ [GmailSync] Parsed incoming message: "${subject}" from ${fromAddress} for ${email} (OTP: ${messageRecord.otp || 'None'})`);
+        console.log(`✅ [GmailSync] Parsed incoming message: "${subject}" from ${fromAddress} for ${exactRecipient} (parent: ${email}) (OTP: ${messageRecord.otp || 'None'})`);
       } catch (err) {
         console.error(`⚠️ [GmailSync] Error parsing message uid ${message.uid}:`, err.message);
       }
@@ -366,6 +412,11 @@ class GmailSyncService {
 
     if (messagesToSave.length > 0) {
       await db.saveMessages(email, messagesToSave);
+      for (const m of messagesToSave) {
+        if (m.exactRecipient && m.exactRecipient !== email) {
+          await db.saveMessages(m.exactRecipient, [m]).catch(() => {});
+        }
+      }
       const accs = this.loadAccounts();
       const a = accs.find(x => x.email === email);
       if (a) {
@@ -456,6 +507,26 @@ class GmailSyncService {
       const rawBuffer = Buffer.from(msgData.raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
       const parsed = await simpleParser(rawBuffer);
 
+      let deliveredTo = '';
+      if (parsed.headers) {
+        const dTo = parsed.headers.get('delivered-to');
+        if (dTo) deliveredTo = typeof dTo === 'string' ? dTo : (dTo.text || dTo.value || '');
+      }
+      const toAddress = parsed.to?.value?.[0]?.address || parsed.to?.text || '';
+
+      const cleanStr = str => {
+        if (!str) return '';
+        const mAngle = String(str).match(/<([^>]+)>/);
+        if (mAngle) return mAngle[1].trim().toLowerCase();
+        const mPlain = String(str).match(/[a-zA-Z0-9_\.\+\-]+@[a-zA-Z0-9_\.\-]+\.[a-zA-Z]{2,}/);
+        return mPlain ? mPlain[0].trim().toLowerCase() : String(str).trim().toLowerCase();
+      };
+
+      const deliveredClean = cleanStr(deliveredTo);
+      const toClean = cleanStr(toAddress);
+      const exactRecipient = (deliveredClean && deliveredClean.endsWith('@gmail.com')) ? deliveredClean : (toClean && toClean.endsWith('@gmail.com') ? toClean : account.email.toLowerCase().trim());
+      const isDotted = exactRecipient !== account.email.toLowerCase().trim();
+
       const msgId = `gmail_oauth_${item.id}`;
       const fromAddress = parsed.from?.value?.[0]?.address || parsed.from?.text || 'unknown';
       const fromName = parsed.from?.value?.[0]?.name || parsed.from?.text || fromAddress;
@@ -466,7 +537,7 @@ class GmailSyncService {
       const rawPayload = {
         id: msgId,
         from: { address: fromAddress, name: fromName },
-        to: [{ address: account.email }],
+        to: [{ address: exactRecipient }],
         subject: subject,
         text: textContent,
         html: htmlContent,
@@ -478,11 +549,14 @@ class GmailSyncService {
       messagesToSave.push({
         ...normalized,
         id: msgId,
-        to: account.email,
-        inboxEmail: account.email,
+        to: exactRecipient,
+        inboxEmail: exactRecipient,
+        exactRecipient: exactRecipient,
+        parentEmail: account.email,
         isOfficialDomain: true,
         domain: 'gmail.com',
         isRealGmail: true,
+        isDottedGmailAlias: isDotted,
         createdAt: rawPayload.createdAt
       });
     }

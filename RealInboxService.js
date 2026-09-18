@@ -27,6 +27,7 @@ class RealInboxService {
 
     this.lastUsedDomainIndex = 0;
     this.rapidApiKey = process.env.INBOXES_RAPIDAPI_KEY || 'aa0398df7bmshdabac4b4ce042d3p14e5d7jsnbccdde4b33bb';
+    this.inboxCooldowns = new Map();
   }
 
   request(url, options = {}, data = null) {
@@ -146,6 +147,17 @@ class RealInboxService {
     if (!isMailTm && (inbox.provider === 'inboxes.com' || inbox.host === 'inboxes.com' || this.allDomains.includes(inbox.domain))) {
       // 1. Try RapidAPI Official Endpoint First (Bypasses all IP bans & rate limits)
       if (this.rapidApiKey) {
+        if (this.monthlyQuotaExceeded) {
+          return [];
+        }
+
+        const lastSync = this.inboxCooldowns.get(inbox.email.toLowerCase()) || 0;
+        if (Date.now() - lastSync < 300000) {
+          // Inside 5-minute cooldown; skip external fetch to preserve monthly quota
+          return [];
+        }
+        this.inboxCooldowns.set(inbox.email.toLowerCase(), Date.now());
+
         try {
           const res = await this.request(`https://inboxes-com.p.rapidapi.com/inboxes/${encodeURIComponent(inbox.email)}`, {
             headers: {
@@ -169,8 +181,15 @@ class RealInboxService {
             });
           }
         } catch (e) {
-          console.warn('⚠️ [RapidAPI] Fallback to web endpoint, error:', e.message);
+          if (e.message && e.message.includes('exceeded the MONTHLY quota')) {
+            this.monthlyQuotaExceeded = true;
+            console.warn('⚠️ [RapidAPI] Monthly quota (100 requests) reached. Pausing inboxes.com polling until next cycle or plan upgrade.');
+            return [];
+          }
+          console.warn('⚠️ [RapidAPI] Request error:', e.message);
+          return [];
         }
+        return [];
       }
 
       if (this.isRateLimited()) {

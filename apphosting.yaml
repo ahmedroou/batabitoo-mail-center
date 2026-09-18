@@ -1,0 +1,14 @@
+# Firebase App Hosting configuration
+# Used when deploying via: firebase deploy --only apphosting
+runConfig:
+  cpu: 1
+  memoryMiB: 1024
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+
+env:
+  - variable: PORT
+    value: "8080"
+  - variable: NODE_ENV
+    value: production

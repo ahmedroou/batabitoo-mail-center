@@ -21,13 +21,17 @@ import kotlinx.coroutines.launch
 
 enum class MainSection { INBOXES, AMAZON, MESSAGES, LOGS, SETTINGS }
 enum class InboxFilter { OFFICIAL, TEMP }
+enum class OfficialSubFilter { ALL, BATABITOO, GMAIL }
 enum class AmazonTab { ALL, SUSPECTED, BANNED, HEALTHY, MESSAGES }
+enum class AmazonDomainFilter { ALL, BATABITOO, GMAIL }
 enum class MessageFilter { CURRENT, OFFICIAL, TEMP }
 
 data class MailUiState(
     val section: MainSection = MainSection.INBOXES,
     val inboxFilter: InboxFilter = InboxFilter.OFFICIAL,
+    val officialSubFilter: OfficialSubFilter = OfficialSubFilter.ALL,
     val amazonTab: AmazonTab = AmazonTab.ALL,
+    val amazonDomainFilter: AmazonDomainFilter = AmazonDomainFilter.ALL,
     val messageFilter: MessageFilter = MessageFilter.CURRENT,
     val counts: Counts = Counts(),
     val officialInboxes: List<Inbox> = emptyList(),
@@ -52,6 +56,7 @@ data class MailUiState(
     val loading: Boolean = true,
     val refreshing: Boolean = false,
     val showCreate: Boolean = false,
+    val showDottedDialog: Boolean = false,
     val createOfficial: Boolean = true,
     val createDomain: String = "batabitoo.com",
     val autoRefresh: Boolean = true,
@@ -107,9 +112,9 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                 val inboxes = repository.inboxes()
                 val current = repository.current()
                 val allMessages = repository.messages()
-                val officialMessages = repository.messages("official").messages
-                val tempMessages = repository.messages("temp").messages
                 val logs = repository.logs()
+
+                val officialEmails = inboxes.official.map { it.email.lowercase().trim() }.toSet()
 
                 val allMsgsList = allMessages.messages.map { msg ->
                     val isBanned = AmazonBannedDetector.isBannedMessage(msg)
@@ -117,6 +122,11 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                     val reason = if (isBanned) AmazonBannedDetector.getBanReason(msg) else ""
                     msg.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
                 }
+                val officialMessages = allMsgsList.filter { msg ->
+                    val email = msg.inboxEmail.lowercase().trim()
+                    officialEmails.contains(email) || msg.isOfficial || email.endsWith("@batabitoo.com") || email.endsWith("@gmail.com")
+                }
+                val tempMessages = allMsgsList.filter { !officialMessages.contains(it) }.map { it.copy(isAmazon = false, isBanned = false) }
                 val amazonMsgs = allMsgsList.filter { it.isAmazon }
                 val bannedMsgs = allMsgsList.filter { it.isBanned }
 
@@ -186,13 +196,8 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                             val reason = if (isBanned) AmazonBannedDetector.getBanReason(msg) else ""
                             msg.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
                         },
-                        officialMessages = officialMessages.map { msg ->
-                            val isBanned = AmazonBannedDetector.isBannedMessage(msg)
-                            val isAmazon = isBanned || AmazonDetector.isAmazonMessage(msg)
-                            val reason = if (isBanned) AmazonBannedDetector.getBanReason(msg) else ""
-                            msg.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
-                        },
-                        tempMessages = tempMessages.map { msg -> msg.copy(isAmazon = false, isBanned = false) },
+                        officialMessages = officialMessages,
+                        tempMessages = tempMessages,
                         amazonMessages = amazonMsgs,
                         bannedMessages = bannedMsgs,
                         logs = logs,
@@ -234,11 +239,22 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshCurrent(silent: Boolean = false) {
         viewModelScope.launch {
             if (!silent) _uiState.update { it.copy(refreshing = true, error = null) }
-            runCatching { repository.current() }
+            val selectedInbox = _uiState.value.activeInbox
+            runCatching {
+                if (selectedInbox == null) {
+                    repository.current()
+                } else {
+                    val messages = repository.messages().messages.filter { message ->
+                        message.inboxEmail.equals(selectedInbox.email, ignoreCase = true) ||
+                            message.to.contains(selectedInbox.email, ignoreCase = true)
+                    }
+                    com.batabitoo.mailcenter.data.CurrentPayload(selectedInbox, messages)
+                }
+            }
                 .onSuccess { payload ->
                     _uiState.update {
                         it.copy(
-                            activeInbox = payload.inbox,
+                            activeInbox = payload.inbox ?: selectedInbox,
                             currentMessages = payload.messages,
                             refreshing = false,
                             online = true,
@@ -252,10 +268,26 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectInbox(inbox: Inbox) {
         viewModelScope.launch {
-            _uiState.update { it.copy(refreshing = true, error = null) }
+            _uiState.update {
+                it.copy(
+                    section = MainSection.MESSAGES,
+                    messageFilter = MessageFilter.CURRENT,
+                    activeInbox = inbox,
+                    currentMessages = emptyList(),
+                    search = "",
+                    refreshing = true,
+                    error = null,
+                )
+            }
             runCatching {
-                repository.selectInbox(inbox.id)
-                repository.current()
+                // Edge selection persistence is best-effort. Navigation must
+                // still work when the public Gmail endpoint is unavailable.
+                runCatching { repository.selectInbox(inbox.id) }
+                val messages = repository.messages().messages.filter { message ->
+                    message.inboxEmail.equals(inbox.email, ignoreCase = true) ||
+                        message.to.contains(inbox.email, ignoreCase = true)
+                }
+                com.batabitoo.mailcenter.data.CurrentPayload(inbox, messages)
             }.onSuccess { payload ->
                 _uiState.update {
                     it.copy(
@@ -421,14 +453,47 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setInboxFilter(value: InboxFilter) = _uiState.update { it.copy(inboxFilter = value, search = "") }
+    fun setOfficialSubFilter(value: OfficialSubFilter) = _uiState.update { it.copy(officialSubFilter = value, search = "") }
     fun setAmazonTab(value: AmazonTab) = _uiState.update { it.copy(amazonTab = value, search = "") }
+    fun setAmazonDomainFilter(value: AmazonDomainFilter) = _uiState.update { it.copy(amazonDomainFilter = value, search = "") }
     fun setMessageFilter(value: MessageFilter) = _uiState.update { it.copy(messageFilter = value, search = "") }
     fun setSearch(value: String) = _uiState.update { it.copy(search = value) }
     fun setCreateVisible(value: Boolean) = _uiState.update { it.copy(showCreate = value) }
+    fun setShowDottedDialog(value: Boolean) = _uiState.update { it.copy(showDottedDialog = value) }
     fun setCreateType(official: Boolean, domain: String = "batabitoo.com") = _uiState.update { it.copy(createOfficial = official, createDomain = domain) }
     fun setAutoRefresh(value: Boolean) = _uiState.update { it.copy(autoRefresh = value) }
     fun closeMessage() { ++messageRequest; _uiState.update { it.copy(selectedMessage = null, messageLoading = false, messageError = null) } }
     fun consumeNotice() = _uiState.update { it.copy(notice = null, error = null) }
+
+    fun generateDottedVariants(email: String, max: Int = 12): List<String> {
+        if (!email.contains("@")) return emptyList()
+        val parts = email.split("@")
+        val base = parts[0].replace(".", "")
+        val domain = parts[1]
+        if (base.length < 2) return emptyList()
+        val list = mutableListOf<String>()
+        for (i in 1 until base.length) {
+            if (list.size >= max) break
+            val variant = "${base.substring(0, i)}.${base.substring(i)}@$domain".lowercase()
+            if (!variant.equals(email, ignoreCase = true)) {
+                list.add(variant)
+            }
+        }
+        return list
+    }
+
+    fun createDottedGmail(parentEmail: String, dottedEmail: String, label: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null) }
+            runCatching {
+                repository.createDottedGmailInbox(parentEmail, dottedEmail, label)
+            }.onSuccess { created ->
+                _uiState.update { it.copy(showDottedDialog = false, notice = "تم اعتماد حساب أمازون النقطي: ${created.email}") }
+                refreshAll()
+                selectInbox(created)
+            }.onFailure { showError(it) }
+        }
+    }
 
     private fun showError(error: Throwable, initial: Boolean = false) {
         _uiState.update {

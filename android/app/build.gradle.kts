@@ -12,8 +12,8 @@ android {
         applicationId = "com.batabitoo.mailcenter"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.3.5"
+        versionCode = 10
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -26,10 +26,22 @@ android {
 
     signingConfigs {
         create("personalRelease") {
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            val envStoreFile = System.getenv("KEYSTORE_PATH")
+            val envStorePassword = System.getenv("KEYSTORE_PASSWORD")
+            val envKeyAlias = System.getenv("KEY_ALIAS")
+            val envKeyPassword = System.getenv("KEY_PASSWORD")
+
+            if (!envStoreFile.isNullOrBlank() && file(envStoreFile).exists()) {
+                storeFile = file(envStoreFile)
+                storePassword = envStorePassword ?: "android"
+                keyAlias = envKeyAlias ?: "androiddebugkey"
+                keyPassword = envKeyPassword ?: "android"
+            } else {
+                storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 

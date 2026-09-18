@@ -227,19 +227,25 @@ class TempSyncService {
    * Fast sync targeted specifically for contest / Nivea / recent inboxes
    */
   async syncContestInboxes() {
-    const niveaLogs = db.getNiveaLogs() || [];
-    const contestEmails = new Set(niveaLogs.map(l => String(l.email || '').toLowerCase().trim()));
-    const allTemp = db.getTempInboxes();
-    const targets = allTemp.filter(i => contestEmails.has(String(i.email || '').toLowerCase()) || (i.messageCount && i.messageCount > 0));
+    try {
+      const allTemp = db.getTempInboxes();
+      if (!allTemp || allTemp.length === 0) return;
 
-    if (targets.length === 0) return;
-
-    for (let i = 0; i < targets.length; i++) {
-      if (this.service.isRateLimited()) break;
-      await this.syncInbox(targets[i]);
-      if (i < targets.length - 1) {
-        await new Promise(r => setTimeout(r, 2000));
+      // 1. Unlimited / Unmetered mail.tm inboxes rotation
+      const mailTmInboxes = allTemp.filter(i => i.domain === 'emalupe.com' || i.domain === 'westcast-systems.com');
+      for (const inbox of mailTmInboxes.slice(0, 8)) {
+        await this.syncInbox(inbox);
+        await new Promise(r => setTimeout(r, 1200));
       }
+
+      // 2. Active inboxes.com inboxes with messages (gentle check to conserve monthly quota)
+      const activeInboxes = allTemp.filter(i => i.domain !== 'emalupe.com' && i.domain !== 'westcast-systems.com' && (i.messageCount > 0 || i.hasWinningMessage));
+      for (const inbox of activeInboxes.slice(0, 2)) {
+        await this.syncInbox(inbox);
+        await new Promise(r => setTimeout(r, 1200));
+      }
+    } catch (e) {
+      console.warn('⚠️ [TempSync] Background auto-sync cycle error:', e.message);
     }
   }
 

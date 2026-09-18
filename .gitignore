@@ -1,23 +1,34 @@
 # Dependencies
 node_modules/
 
-# Secrets and Keys
+# Secrets, OAuth and Credentials
 serviceAccountKey.json
+google_oauth_config.json
+gmail_connections.json
 .env
 .env.*
+keystore.properties
+*.jks
+*.keystore
 
-# Local Database & Live User Data
-inboxes_db.json
-inboxes_db.*.json
+# Local SQLite & Live User Data
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+inboxes_db*.json
 *.backup.json
-results_nivea_live.json
-results_nivea_live.*.json
+results_*.json
+nivea_*.json
 private/
 .mail-tests/
+scratch/
 
 # Binaries & Releases (hosted on GitHub Releases)
 *.apk
 *.exe
+*.zip
 cloudflared.exe
 
 # Android build & caches
@@ -30,7 +41,12 @@ android/local.properties
 # Firebase local cache
 .firebase/
 
+# Next.js build
+.next/
+
 # Previews and testing artifacts
 .preview-chrome*/
 web-preview-*.png
+scripts/*.png
+scripts/*.json
 

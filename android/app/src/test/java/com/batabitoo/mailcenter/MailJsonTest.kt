@@ -304,6 +304,20 @@ class MailJsonTest {
         val info2 = MailJson.appVersion(jsonNewUpdate, currentVersionCode = 2)
         assertFalse(info2.hasUpdate)
 
+        // 2.1 Test sha256 parsing
+        val jsonWithSha = """
+            {
+                "latestVersionCode": 10,
+                "latestVersionName": "1.4.0",
+                "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.4.0/Batabitoo-Mail-Center-1.4.0.apk",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "releaseNotes": "تحديث الأمان",
+                "mandatory": false
+            }
+        """.trimIndent()
+        val infoSha = MailJson.appVersion(jsonWithSha, currentVersionCode = 9)
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", infoSha.sha256)
+
         // 3. Status JSON with embedded appVersion
         val statusJson = """
             {

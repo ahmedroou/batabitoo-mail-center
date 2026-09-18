@@ -445,6 +445,10 @@ private fun MailDocument(
     baseUrl: String,
     openLink: (String) -> Unit,
 ) {
+    var allowImages by rememberSaveable(content, text) { mutableStateOf(false) }
+    val hasExternalImages = remember(content) {
+        content.contains("<img", ignoreCase = true)
+    }
     val preparedHtml = remember(content, text) { prepareGmailHtml(content, text) }
     val effectiveBaseUrl = remember(baseUrl) {
         if (baseUrl.isNotBlank() && baseUrl.startsWith("http", ignoreCase = true)) {
@@ -454,56 +458,89 @@ private fun MailDocument(
         }
     }
 
-    AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                setBackgroundColor(android.graphics.Color.WHITE)
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    databaseEnabled = true
-                    allowFileAccess = false
-                    allowContentAccess = false
-                    loadsImagesAutomatically = true
-                    blockNetworkImage = false
-                    blockNetworkLoads = false
-                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    useWideViewPort = false
-                    loadWithOverviewMode = false
-                    setSupportZoom(true)
-                    builtInZoomControls = true
-                    displayZoomControls = false
-                    textZoom = 100
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (hasExternalImages && !allowImages) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF1F5F9))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "🛡️ تم حظر الصور الخارجية حمايةً للخصوصية",
+                    fontSize = 11.sp,
+                    color = Color(0xFF475569),
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = { allowImages = true },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                    modifier = Modifier.height(28.dp),
+                ) {
+                    Text("عرض الصور", fontSize = 11.sp, color = Color.White)
                 }
-                isVerticalScrollBarEnabled = true
-                isHorizontalScrollBarEnabled = true
-                scrollBarStyle = android.view.View.SCROLLBARS_INSIDE_OVERLAY
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        if (request.isForMainFrame) openLink(request.url.toString())
-                        return true
+            }
+        }
+
+        AndroidView(
+            factory = { context ->
+                WebView(context).apply {
+                    setBackgroundColor(android.graphics.Color.WHITE)
+                    settings.apply {
+                        javaScriptEnabled = false
+                        domStorageEnabled = false
+                        databaseEnabled = false
+                        allowFileAccess = false
+                        allowContentAccess = false
+                        loadsImagesAutomatically = true
+                        blockNetworkImage = !allowImages
+                        blockNetworkLoads = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        useWideViewPort = false
+                        loadWithOverviewMode = false
+                        setSupportZoom(true)
+                        builtInZoomControls = true
+                        displayZoomControls = false
+                        textZoom = 100
                     }
-                    @Suppress("DEPRECATION")
-                    override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                        openLink(url)
-                        return true
+                    isVerticalScrollBarEnabled = true
+                    isHorizontalScrollBarEnabled = true
+                    scrollBarStyle = android.view.View.SCROLLBARS_INSIDE_OVERLAY
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                            if (request.isForMainFrame) openLink(request.url.toString())
+                            return true
+                        }
+                        @Suppress("DEPRECATION")
+                        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                            openLink(url)
+                            return true
+                        }
                     }
+                    setDownloadListener { url, _, _, _, _ -> openLink(url) }
                 }
-                setDownloadListener { url, _, _, _, _ -> openLink(url) }
-            }
-        },
-        update = { view ->
-            if (view.tag != preparedHtml) {
-                view.tag = preparedHtml
-                view.loadDataWithBaseURL(effectiveBaseUrl, preparedHtml, "text/html", "UTF-8", null)
-            }
-        },
-        onRelease = { view ->
-            view.stopLoading()
-            view.destroy()
-        },
-        modifier = Modifier.fillMaxSize(),
-    )
+            },
+            update = { view ->
+                view.settings.blockNetworkImage = !allowImages
+                val tagKey = "$preparedHtml-$allowImages"
+                if (view.tag != tagKey) {
+                    view.tag = tagKey
+                    view.loadDataWithBaseURL(effectiveBaseUrl, preparedHtml, "text/html", "UTF-8", null)
+                }
+            },
+            onRelease = { view ->
+                view.stopLoading()
+                view.destroy()
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f),
+        )
+    }
 }
 
 /**

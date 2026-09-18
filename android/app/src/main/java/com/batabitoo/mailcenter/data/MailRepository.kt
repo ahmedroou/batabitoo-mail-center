@@ -8,10 +8,6 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 class MailRepository(context: Context) {
     private val preferences = context.getSharedPreferences("mail_center", Context.MODE_PRIVATE)
@@ -20,31 +16,45 @@ class MailRepository(context: Context) {
         get() = preferences.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL
         private set(value) = preferences.edit().putString(KEY_BASE_URL, normalizeUrl(value)).apply()
 
+    var sessionToken: String?
+        get() = preferences.getString(KEY_SESSION_TOKEN, null)
+        private set(value) = preferences.edit().putString(KEY_SESSION_TOKEN, value).apply()
+
+    var masterPin: String
+        get() = preferences.getString(KEY_MASTER_PIN, "") ?: ""
+        private set(value) = preferences.edit().putString(KEY_MASTER_PIN, value).apply()
+
     fun updateBaseUrl(value: String) { baseUrl = value }
+
+    fun updateMasterPin(pin: String) { masterPin = pin }
+
+    suspend fun login(pin: String): Boolean = withContext(Dispatchers.IO) {
+        masterPin = pin
+        val body = JSONObject().apply { put("pin", pin) }.toString()
+        val res = runCatching { request("/api/auth/login", "POST", body, skipAuth = true) }.getOrNull() ?: return@withContext false
+        val token = runCatching { JSONObject(res).optString("token") }.getOrNull()
+        if (!token.isNullOrBlank()) {
+            sessionToken = token
+            true
+        } else false
+    }
+
+    suspend fun logout() = withContext(Dispatchers.IO) {
+        runCatching { request("/api/auth/logout", "POST", null) }
+        sessionToken = null
+    }
 
     suspend fun status(currentVersionCode: Int = 1): SystemStatus = withContext(Dispatchers.IO) {
         val sysStatus = runCatching {
             MailJson.status(fetchCached("status", "/api/status"), currentVersionCode)
         }.getOrElse {
-            SystemStatus(online = true, cloudConnected = true, projectId = "batabitoo-mail-2026")
+            SystemStatus(online = true, cloudConnected = false, projectId = "batabitoo-mail-2026")
         }
         val ver = sysStatus.appVersion ?: runCatching { appVersion(currentVersionCode) }.getOrNull()
         sysStatus.copy(appVersion = ver)
     }
 
     suspend fun appVersion(currentVersionCode: Int = 1): AppVersionInfo = withContext(Dispatchers.IO) {
-        // 1. Direct Cloud Firestore REST API (highest reliability & 100% uptime, no worker/tunnel dependencies)
-        val fromFirestore = runCatching {
-            val raw = directGet(FIRESTORE_VERSION_URL)
-            preferences.edit().putString("cache_app_version_raw", raw).apply()
-            MailJson.firestoreAppVersion(raw, currentVersionCode)
-        }.getOrNull()
-
-        if (fromFirestore != null && fromFirestore.latestVersionCode > 0) {
-            return@withContext fromFirestore
-        }
-
-        // 2. Fallback to /api/app/version on configured server
         val fromServer = runCatching {
             MailJson.appVersion(fetchCached("app_version", "/api/app/version"), currentVersionCode)
         }.getOrNull()
@@ -53,19 +63,17 @@ class MailRepository(context: Context) {
             return@withContext fromServer
         }
 
-        // 3. Fallback to cached Firestore version if offline
-        val cachedRaw = preferences.getString("cache_app_version_raw", null)
+        val cachedRaw = preferences.getString("cache_app_version", null)
         if (!cachedRaw.isNullOrBlank()) {
-            val cached = runCatching { MailJson.firestoreAppVersion(cachedRaw, currentVersionCode) }.getOrNull()
+            val cached = runCatching { MailJson.appVersion(cachedRaw, currentVersionCode) }.getOrNull()
             if (cached != null) return@withContext cached
         }
 
-        // 4. Safe default
         AppVersionInfo(
             latestVersionCode = currentVersionCode,
-            latestVersionName = "1.2.0",
-            downloadUrl = "https://github.com/ahmedroou/batabitoo-releases/releases/download/v1.2.0/Batabitoo-Mail-Center-1.2.0.apk",
-            releaseNotes = "إصلاح شامل لعرض وقراءة البريد ليماثل Gmail، صفحة أمازون المستقلة بتصميم حركي، تنقية أسماء المرسلين.",
+            latestVersionName = "1.4.0",
+            downloadUrl = "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.4.0/Batabitoo-Mail-Center-1.4.0.apk",
+            releaseNotes = "تحديث الأمان وقاعدة البيانات المحلية وموثوقية الرسائل",
             mandatory = false,
             updatedAt = "",
             hasUpdate = false,
@@ -77,43 +85,13 @@ class MailRepository(context: Context) {
             MailJson.inboxes(fetchCached("inboxes", "/api/inboxes"))
         }.getOrNull()
 
-        val fromFirestore = runCatching {
-            val raw = directGet(FIRESTORE_INBOXES_URL)
-            preferences.edit().putString("cache_inboxes_firestore_raw", raw).apply()
-            MailJson.firestoreInboxes(raw)
-        }.getOrNull()
-
-        if (fromServer != null && (fromServer.official.isNotEmpty() || fromServer.temp.isNotEmpty())) {
-            // The edge inbox service can be behind on ban fields. Merge only account
-            // classification metadata from Firestore while keeping its complete list.
-            val cloudById = fromFirestore?.official.orEmpty().associateBy { it.id }
-            val cloudByEmail = fromFirestore?.official.orEmpty().associateBy { it.email.lowercase() }
-            val official = fromServer.official.map { inbox ->
-                val cloud = cloudById[inbox.id] ?: cloudByEmail[inbox.email.lowercase()]
-                if (cloud == null) inbox else inbox.copy(
-                    isAmazon = cloud.isAmazon,
-                    isBanned = cloud.isBanned,
-                    banStatus = cloud.banStatus,
-                    banReason = cloud.banReason.ifBlank { inbox.banReason },
-                )
-            }
-            return@withContext InboxesPayload(
-                activeId = fromServer.activeId,
-                official = official,
-                temp = fromServer.temp,
-                amazon = official.filter { it.isAmazon },
-                banned = official.filter { it.isConfirmedBanned },
-                suspected = official.filter { it.isSuspected },
-            )
+        if (fromServer != null) {
+            return@withContext fromServer
         }
 
-        if (fromFirestore != null && (fromFirestore.official.isNotEmpty() || fromFirestore.temp.isNotEmpty())) {
-            return@withContext fromFirestore
-        }
-
-        val cachedRaw = preferences.getString("cache_inboxes_firestore_raw", null)
+        val cachedRaw = preferences.getString("cache_inboxes", null)
         if (!cachedRaw.isNullOrBlank()) {
-            runCatching { MailJson.firestoreInboxes(cachedRaw) }.getOrNull() ?: InboxesPayload()
+            runCatching { MailJson.inboxes(cachedRaw) }.getOrNull() ?: InboxesPayload()
         } else {
             InboxesPayload()
         }
@@ -125,7 +103,12 @@ class MailRepository(context: Context) {
         }.getOrNull()
 
         if (fromServer != null && fromServer.inbox != null) {
-            return@withContext fromServer
+            val active = fromServer.inbox
+            val mergedMessages = messages().messages.filter { message ->
+                message.inboxEmail.equals(active.email, ignoreCase = true) ||
+                    message.to.contains(active.email, ignoreCase = true)
+            }
+            return@withContext fromServer.copy(messages = mergedMessages.ifEmpty { fromServer.messages })
         }
 
         val inboxesPayload = inboxes()
@@ -142,23 +125,13 @@ class MailRepository(context: Context) {
             MailJson.messages(fetchCached("messages_${type ?: "all"}", "/api/all-messages$suffix"))
         }.getOrNull()
 
-        if (fromServer != null && fromServer.messages.isNotEmpty()) {
+        if (fromServer != null) {
             return@withContext fromServer
         }
 
-        val fromFirestore = runCatching {
-            val raw = directGet(FIRESTORE_MESSAGES_URL)
-            preferences.edit().putString("cache_messages_firestore_raw", raw).apply()
-            MailJson.firestoreMessages(raw)
-        }.getOrNull()
-
-        if (fromFirestore != null && fromFirestore.messages.isNotEmpty()) {
-            return@withContext fromFirestore
-        }
-
-        val cachedRaw = preferences.getString("cache_messages_firestore_raw", null)
+        val cachedRaw = preferences.getString("cache_messages_${type ?: "all"}", null)
         if (!cachedRaw.isNullOrBlank()) {
-            runCatching { MailJson.firestoreMessages(cachedRaw) }.getOrNull() ?: MessagesPayload()
+            runCatching { MailJson.messages(cachedRaw) }.getOrNull() ?: MessagesPayload()
         } else {
             MessagesPayload()
         }
@@ -190,51 +163,25 @@ class MailRepository(context: Context) {
             }
         }
         val path = if (official) "/api/official/create" else "/api/inboxes/create"
-        val serverResult = runCatching {
-            MailJson.createdInbox(request(path, "POST", body.toString()))
-        }.getOrNull()
+        MailJson.createdInbox(request(path, "POST", body.toString()))
+    }
 
-        if (serverResult != null && (!domain.contains("gmail") || serverResult.email.endsWith("@gmail.com"))) {
-            return@withContext serverResult
+    suspend fun createDottedGmailInbox(parentEmail: String, dottedEmail: String, label: String): Inbox = withContext(Dispatchers.IO) {
+        val cleanParent = parentEmail.trim().lowercase()
+        val cleanDotted = dottedEmail.trim().lowercase()
+        val cleanLabel = label.trim().ifBlank { cleanDotted.substringBefore('@') }
+
+        val backendBody = JSONObject().apply {
+            put("personName", cleanLabel)
+            put("label", cleanLabel)
+            put("prefix", cleanDotted)
+            put("email", cleanDotted)
+            put("domain", "gmail.com")
+            put("parentEmail", cleanParent)
+            put("isDottedGmailAlias", true)
+            put("isAmazon", true)
         }
-
-        // Direct 24/7 Cloud Firestore REST API fallback if backend is offline
-        val effectiveDomain = if (official) {
-            if (domain.contains("gmail") || prefix.endsWith("@gmail.com", true)) "gmail.com" else "batabitoo.com"
-        } else "temp"
-        val email = if (prefix.contains("@")) prefix.lowercase() else {
-            val cleanPrefix = prefix.filter { it.isLetterOrDigit() || it == '.' }.ifBlank { "amazon.acc" }
-            "$cleanPrefix@$effectiveDomain".lowercase()
-        }
-        val docId = "official_${System.currentTimeMillis()}_${(1000..9999).random()}"
-        val cleanName = name.ifBlank { "حساب رسمي (${email.substringBefore('@')})" }
-        val nowIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }.format(Date())
-
-        val postUrl = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=$docId"
-        val firestoreBody = JSONObject().apply {
-            val fields = JSONObject().apply {
-                put("id", JSONObject().apply { put("stringValue", docId) })
-                put("email", JSONObject().apply { put("stringValue", email) })
-                put("domain", JSONObject().apply { put("stringValue", effectiveDomain) })
-                put("host", JSONObject().apply { put("stringValue", if (effectiveDomain == "gmail.com") "Gmail (Google Official)" else "batabitoo.com (Official Trusted)") })
-                put("label", JSONObject().apply { put("stringValue", cleanName) })
-                put("personName", JSONObject().apply { put("stringValue", cleanName) })
-                put("isOfficial", JSONObject().apply { put("booleanValue", official) })
-                put("isAmazon", JSONObject().apply { put("booleanValue", false) })
-                put("isBanned", JSONObject().apply { put("booleanValue", false) })
-                put("banStatus", JSONObject().apply { put("stringValue", "none") })
-                put("banReason", JSONObject().apply { put("stringValue", "") })
-                put("type", JSONObject().apply { put("stringValue", if (official) "official" else "temp") })
-                put("messageCount", JSONObject().apply { put("integerValue", "0") })
-                put("createdAt", JSONObject().apply { put("stringValue", nowIso) })
-            }
-            put("fields", fields)
-        }
-
-        val fsResponse = directPost(postUrl, firestoreBody.toString())
-        MailJson.firestoreInbox(JSONObject(fsResponse))
+        MailJson.createdInbox(request("/api/official/create", "POST", backendBody.toString()))
     }
 
     suspend fun deleteInbox(id: String) = withContext(Dispatchers.IO) {
@@ -255,45 +202,12 @@ class MailRepository(context: Context) {
     }
 
     suspend fun setBanStatus(id: String, status: String, reason: String = ""): String = withContext(Dispatchers.IO) {
-        val serverResult = runCatching {
-            val body = JSONObject().apply {
-                put("id", id)
-                put("banStatus", status)
-                if (reason.isNotBlank()) put("reason", reason)
-            }
-            request("/api/inbox/ban-status", "POST", body.toString())
-        }.getOrNull()
-
-        if (!serverResult.isNullOrBlank() && !serverResult.contains("Not found", ignoreCase = true) && !serverResult.contains("error", ignoreCase = true)) {
-            return@withContext serverResult
+        val body = JSONObject().apply {
+            put("id", id)
+            put("banStatus", status)
+            if (reason.isNotBlank()) put("reason", reason)
         }
-
-        // Direct 24/7 Firestore REST API fallback
-        val firestoreResult = runCatching {
-            val docId = if (id.contains("@")) "inbox_${id.lowercase().replace(Regex("[^a-z0-9]"), "_")}" else id
-            val updateUrl = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/${URLEncoder.encode(docId, "UTF-8")}?updateMask.fieldPaths=banStatus&updateMask.fieldPaths=isBanned"
-            val fieldsObj = JSONObject().apply {
-                put("banStatus", JSONObject().put("stringValue", status))
-                put("isBanned", JSONObject().put("booleanValue", status == "confirmed"))
-                if (reason.isNotBlank()) {
-                    put("banReason", JSONObject().put("stringValue", reason))
-                }
-            }
-            val payload = JSONObject().put("fields", fieldsObj)
-            val conn = (URL(updateUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "PATCH"
-                doOutput = true
-                connectTimeout = 8000
-                readTimeout = 8000
-                setRequestProperty("Content-Type", "application/json")
-                outputStream.write(payload.toString().toByteArray(Charsets.UTF_8))
-            }
-            if (conn.responseCode in 200..299) {
-                "{\"success\":true,\"firestore\":true}"
-            } else null
-        }.getOrNull()
-
-        firestoreResult ?: throw IOException("تعذر حفظ حالة الحساب في الخدمة العامة والتخزين السحابي")
+        request("/api/inbox/ban-status", "POST", body.toString())
     }
 
     suspend fun triggerAiVerify(id: String): String = withContext(Dispatchers.IO) {
@@ -311,13 +225,21 @@ class MailRepository(context: Context) {
         }
     }
 
-    private fun request(path: String, method: String = "GET", body: String? = null): String {
+    private fun request(path: String, method: String = "GET", body: String? = null, skipAuth: Boolean = false): String {
         val url = URL("$baseUrl$path")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 8000
             readTimeout = 8000
             setRequestProperty("Accept", "application/json")
+            if (!skipAuth) {
+                val token = sessionToken
+                if (!token.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer $token")
+                } else if (masterPin.isNotBlank()) {
+                    setRequestProperty("X-Master-PIN", masterPin)
+                }
+            }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
@@ -326,6 +248,22 @@ class MailRepository(context: Context) {
         }
 
         val code = connection.responseCode
+        if (code == 401 && !skipAuth && masterPin.isNotBlank()) {
+            val loginOk = runCatching {
+                val loginBody = JSONObject().apply { put("pin", masterPin) }.toString()
+                val res = request("/api/auth/login", "POST", loginBody, skipAuth = true)
+                val newToken = JSONObject(res).optString("token")
+                if (newToken.isNotBlank()) {
+                    sessionToken = newToken
+                    true
+                } else false
+            }.getOrDefault(false)
+
+            if (loginOk) {
+                return request(path, method, body, skipAuth = false)
+            }
+        }
+
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
         val raw = stream.bufferedReader().use { it.readText() }
 
@@ -337,44 +275,7 @@ class MailRepository(context: Context) {
         return raw
     }
 
-    private fun directGet(urlStr: String): String {
-        val url = URL(urlStr)
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 8000
-            readTimeout = 8000
-            setRequestProperty("Accept", "application/json")
-        }
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
-        val raw = stream.bufferedReader().use { it.readText() }
-        if (code !in 200..299) {
-            throw IOException("Firestore HTTP $code")
-        }
-        return raw
-    }
-
-    private fun directPost(urlStr: String, body: String): String {
-        val url = URL(urlStr)
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 8000
-            readTimeout = 8000
-            doOutput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        }
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
-        val raw = stream.bufferedReader().use { it.readText() }
-        if (code !in 200..299) {
-            throw IOException("Firestore HTTP $code: $raw")
-        }
-        return raw
-    }
-
-    private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
+    private fun encodePath(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
     private fun normalizeUrl(value: String): String {
         val trimmed = value.trim().trimEnd('/')
         return when {
@@ -386,9 +287,8 @@ class MailRepository(context: Context) {
 
     companion object {
         const val DEFAULT_BASE_URL = "https://inbox-api.batabitoo.com"
-        const val FIRESTORE_VERSION_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/app_config/version"
-        const val FIRESTORE_INBOXES_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?pageSize=300"
-        const val FIRESTORE_MESSAGES_URL = "https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/messages?pageSize=300"
         private const val KEY_BASE_URL = "base_url"
+        private const val KEY_SESSION_TOKEN = "session_token"
+        private const val KEY_MASTER_PIN = "master_pin"
     }
 }

@@ -18,12 +18,74 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=16">
+  <link rel="stylesheet" href="/styles.css?v=17">
   <link rel="stylesheet" href="/reader.css?v=2">
   <link rel="stylesheet" href="/amazon.css?v=2">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    (function() {
+      try {
+        var token = localStorage.getItem('batabitoo_session_token') || sessionStorage.getItem('batabitoo_session_token');
+        var hasCookie = document.cookie.split(';').some(function(c) {
+          return c.trim().indexOf('batabitoo_session=') === 0;
+        });
+        if (token || hasCookie) {
+          document.documentElement.classList.add('pin-pre-unlocked');
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <style>
+    html.pin-pre-unlocked #pin-lock-overlay {
+      display: none !important;
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+  </style>
 </head>
 <body>
-  <div class="app-shell">
+  <!-- Security Master PIN Lock Screen -->
+  <div id="pin-lock-overlay" class="pin-lock-overlay">
+    <div class="pin-lock-card" id="pin-lock-card">
+      <div class="pin-lock-badge">
+        <svg viewBox="0 0 24 24" width="28" height="28"><path fill="#38bdf8" d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+      </div>
+      <h3 class="pin-title">مركز رسائل بطابيطو</h3>
+      <p class="pin-desc">الوصول محمي، أدخل رمز الأمان المكون من 4 أرقام</p>
+
+      <!-- PIN dots indicator -->
+      <div class="pin-dots" id="pin-dots" role="status" aria-label="مؤشر الرمز">
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+      </div>
+
+      <!-- Hidden actual input for hardware keyboard & paste -->
+      <input type="password" id="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" class="pin-hidden-input" aria-label="رمز المرور">
+
+      <div id="pin-error-msg" class="pin-error-msg hidden">⚠️ رمز الأمان غير صحيح! حاول مرة أخرى</div>
+
+      <!-- Mobile Touch Keypad -->
+      <div class="pin-keypad" id="pin-keypad">
+        <button type="button" class="pin-key" data-digit="1">1</button>
+        <button type="button" class="pin-key" data-digit="2">2</button>
+        <button type="button" class="pin-key" data-digit="3">3</button>
+        <button type="button" class="pin-key" data-digit="4">4</button>
+        <button type="button" class="pin-key" data-digit="5">5</button>
+        <button type="button" class="pin-key" data-digit="6">6</button>
+        <button type="button" class="pin-key" data-digit="7">7</button>
+        <button type="button" class="pin-key" data-digit="8">8</button>
+        <button type="button" class="pin-key" data-digit="9">9</button>
+        <button type="button" class="pin-key pin-key-action" id="pin-key-clear">مسح</button>
+        <button type="button" class="pin-key" data-digit="0">0</button>
+        <button type="button" class="pin-key pin-key-action" id="pin-key-del">⌫</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-shell" id="app-shell">
     <header class="topbar">
       <div class="brand" id="brand-home-btn" role="button" tabindex="0" title="الرجوع إلى الرئيسية">
         <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 9.5 16 4l11 5.5v13L16 28 5 22.5z"/><path d="m8 11 8 5 8-5M16 16v8"/></svg></div>
@@ -33,6 +95,7 @@
         <div class="connection-pill" id="connection-pill"><span class="status-dot"></span><span id="connection-text">جاري الاتصال</span></div>
         <button class="amazon-hub-pill" id="open-amazon-hub-btn" type="button" title="مركز أمازون المتكامل"><span class="hub-icon">🛒</span><span>مركز أمازون</span><b id="amazon-nav-count">0</b></button>
         <button class="icon-button" id="refresh-all" aria-label="تحديث الكل" title="تحديث الكل"><svg viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"/></svg></button>
+        <button class="icon-button lock-btn" id="lock-app-btn" aria-label="قفل الشاشة" title="قفل الموقع برمز الأمان 🔒"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg></button>
         <button class="primary-button" id="new-inbox-top"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>صندوق جديد</span></button>
       </div>
     </header>
@@ -50,6 +113,11 @@
       <aside class="sidebar" id="sidebar">
         <div class="panel-heading"><div><span class="section-kicker">حساباتك</span><h2>صناديق البريد</h2></div><button class="mini-add" id="new-inbox-side" aria-label="إضافة صندوق"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <div class="segmented" id="inbox-filter"><button class="active" data-inbox-type="official"><span>رسمي</span><b id="official-count">0</b></button><button data-inbox-type="temp"><span>سريع</span><b id="temp-count">0</b></button><button data-inbox-type="amazon" class="amazon-choice"><span>🛒 أمازون</span><b id="amazon-count">0</b></button><button data-inbox-type="banned"><span>محظور</span><b id="banned-count">0</b></button></div>
+        <div class="compact-sub-bar" id="official-sub-selector">
+          <button class="sub-tab-pill active" type="button" data-official-filter="all"><span>كل الرسمي</span><b id="sub-count-off-all">0</b></button>
+          <button class="sub-tab-pill" type="button" data-official-filter="batabitoo"><span>🏢 بطابيطو</span><b id="sub-count-off-batabitoo">0</b></button>
+          <button class="sub-tab-pill" type="button" data-official-filter="gmail"><span>🔴 Gmail</span><b id="sub-count-off-gmail">0</b></button>
+        </div>
         <label class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="inbox-search" type="search" placeholder="ابحث عن صندوق"></label>
         <div class="inbox-list" id="inbox-list"><div class="skeleton-list"></div></div>
       </aside>
@@ -89,11 +157,15 @@
             <div class="amazon-hero-main">
               <div class="amazon-brand-badge"><span class="amazon-cart-icon">a</span><span>Amazon Accounts</span><i></i></div>
               <h2>حسابات أمازون، أوضح وأسرع</h2>
-              <p>تابع سلامة كل حساب، راجع حالات الاشتباه، وافتح الرسائل ورموز التحقق من مساحة واحدة.</p>
+              <p>تابع سلامة كل حساب، راجع حالات الاشتباه، وافتح الرسائل ورموز التحقق من مساحة واحدة. <span style="display:inline-block;margin-top:4px;color:#ea580c;font-size:12px;font-weight:600;">⚡ الاستكشاف التلقائي نشط: أي حساب أمازون يُنشأ ببريد نقطي يُكتشف ويُضاف تلقائياً بمجرد وصول أول رسالة إليه.</span></p>
               <div class="amazon-hero-actions">
                 <button class="primary-button amazon-create-btn" id="amazon-quick-create-btn" type="button">
                   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
                   <span>إنشاء الحساب التالي <b id="amazon-seq-name">ahmedroou</b></span>
+                </button>
+                <button class="soft-button amazon-add-dotted-btn" id="amazon-add-dotted-btn" type="button" title="إضافة تفريع نقطي لـ Gmail لحساب أمازون">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="6" cy="12" r="2"/><circle cx="18" cy="12" r="2"/></svg>
+                  <span>+ تفريع نقطي لـ Gmail</span>
                 </button>
                 <button class="soft-button amazon-hero-back" id="amazon-hero-back-btn" type="button" title="الرجوع إلى البريد الوارد">
                   <svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
@@ -129,6 +201,12 @@
             </div>
 
             <div class="amazon-results-heading"><div><span id="amazon-results-kicker">إدارة الحسابات</span><h3 id="amazon-results-title">كل حسابات أمازون</h3></div><span id="amazon-results-count" aria-live="polite">0 حساب</span></div>
+
+            <div class="compact-sub-bar amazon-domain-selector" id="amazon-domain-selector">
+              <button class="sub-tab-pill active" type="button" data-amazon-domain="all"><span>كل النطاقات</span><b id="sub-count-amz-all">0</b></button>
+              <button class="sub-tab-pill" type="button" data-amazon-domain="batabitoo"><span>🏢 أمازون بطابيطو</span><b id="sub-count-amz-batabitoo">0</b></button>
+              <button class="sub-tab-pill" type="button" data-amazon-domain="gmail"><span>🔵 أمازون Gmail والنقاط</span><b id="sub-count-amz-gmail">0</b></button>
+            </div>
 
             <div class="amazon-inboxes-reel amazon-account-grid" id="amazon-inboxes-reel"></div>
 
@@ -231,6 +309,10 @@
           <div class="reader-notice hidden" id="reader-notice" role="status"></div>
           <section class="reader-attachments hidden" id="reader-attachments" aria-label="مرفقات الرسالة"></section>
           <div class="reader-content-card" aria-busy="true">
+            <div id="reader-image-privacy-bar" class="reader-image-privacy-bar hidden">
+              <span>🛡️ تم حظر الصور الخارجية لحماية الخصوصية.</span>
+              <button type="button" id="reader-load-images-btn" class="btn-load-images">عرض الصور</button>
+            </div>
             <div class="reader-paper-label"><span>محتوى الرسالة الكامل</span><span id="reader-content-status" role="status">جاري التحميل…</span></div>
             <iframe id="reader-frame" title="محتوى الرسالة الكامل" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
           </div>
@@ -304,54 +386,11 @@
         </button>
       </form>
 
-      <!-- Real Gmail Connection Section (Shown when gmail is clicked) -->
+      <!-- Real Gmail Connection Section (Shown when gmail is clicked) — OAuth only -->
       <div id="gmail-connect-section" class="hidden">
-        <div class="gmail-method-tabs" id="gmail-method-tabs">
-          <button type="button" class="active" data-gmail-method="app_password">
-            <span>🔑 كلمة مرور التطبيقات</span>
-            <small>مباشر وموصى به</small>
-          </button>
-          <button type="button" data-gmail-method="oauth">
-            <span>🚀 تسجيل دخول Google</span>
-            <small>OAuth 2.0 رسمي</small>
-          </button>
-        </div>
 
-        <!-- Tab 1: App Password Form -->
-        <form id="gmail-app-form" class="gmail-method-panel">
-          <label class="field">
-            <span>اسم أو وصف الحساب</span>
-            <input id="gmail-app-name" autocomplete="off" placeholder="مثال: جيميل أمازون">
-          </label>
-          <label class="field">
-            <span>بريد Gmail الكامل</span>
-            <input id="gmail-app-email" type="email" dir="ltr" autocomplete="email" placeholder="username@gmail.com" required>
-          </label>
-          <label class="field">
-            <span>كلمة مرور التطبيقات (App Password)</span>
-            <input id="gmail-app-password" type="password" dir="ltr" autocomplete="new-password" placeholder="16 حرفاً من Google بدون مسافات" required>
-          </label>
-
-          <div class="gmail-guide-box">
-            <div class="guide-header">
-              <strong>💡 كيف تحصل على كلمة مرور التطبيقات في دقيقة؟</strong>
-              <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">صفحة Google ↗</a>
-            </div>
-            <ol>
-              <li>تأكد من تفعيل «التحقق بخطوتين» في حساب Google.</li>
-              <li>افتح الرابط أعلاه، اكتب اسماً للتطبيق (مثل <code>Batabitoo</code>) واضغط إنشاء.</li>
-              <li>انسخ كلمة المرور المكونة من 16 حرفاً وضعها في الحقل أعلاه.</li>
-            </ol>
-          </div>
-
-          <button class="submit-button gmail-connect-btn" id="gmail-app-submit" type="submit">
-            <span>ربط واختبار الاتصال فوراً</span>
-            <svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7z"/></svg>
-          </button>
-        </form>
-
-        <!-- Tab 2: OAuth 2.0 Form -->
-        <div id="gmail-oauth-panel" class="gmail-method-panel hidden">
+        <!-- OAuth 2.0 Panel (only method) -->
+        <div id="gmail-oauth-panel" class="gmail-method-panel">
           <div class="oauth-hero">
             <div class="google-badge-icon">
               <svg viewBox="0 0 24 24" width="26" height="26"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
@@ -379,12 +418,61 @@
           </div>
         </div>
       </div>
+
+    </article>
+  </div>
+
+  <!-- Modal: Amazon Dotted Gmail Account Generator & Creator -->
+  <div class="modal-backdrop hidden" id="amazon-dotted-backdrop">
+    <article class="modal-card compact-card" id="amazon-dotted-modal" style="max-width: 480px; margin: 20px auto;">
+      <header class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-badge-icon" style="background: rgba(37, 99, 235, 0.12); color: #2563eb; border-radius: 8px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 18px;">🔵</div>
+          <div>
+            <h3>تفريع حساب أمازون بنقاط Gmail</h3>
+            <p>الاستكشاف تلقائي 100%، ويمكنك استخدام هذا النموذج فقط إذا أردت تجهيز الحساب مسبقاً قبل وصول الرسائل.</p>
+          </div>
+        </div>
+        <button class="close-btn" id="close-amazon-dotted-modal" type="button" aria-label="إغلاق">✕</button>
+      </header>
+
+      <form id="amazon-dotted-form" style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px;">
+        <label class="field">
+          <span>حساب Gmail المضيف (الأساسي)</span>
+          <select id="dotted-parent-select" dir="ltr" style="padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface); font-size: 14px;">
+            <!-- Populated dynamically with linked Gmail accounts -->
+          </select>
+        </label>
+
+        <div class="field">
+          <span>تفريعات نقطية مقترحة جاهزة (اضغط للاختيار السريع)</span>
+          <div class="dotted-suggestions-grid" id="dotted-suggestions-grid">
+            <!-- Populated dynamically with clickable chips -->
+          </div>
+        </div>
+
+        <label class="field">
+          <span>البريد النقطي المعتمد لحساب أمازون</span>
+          <input id="dotted-email-input" type="email" dir="ltr" placeholder="a.hmedroou1122@gmail.com" required>
+          <small style="color: #64748b; font-size: 11.5px; margin-top: 4px; display: block;">جوجل يوجه الرسائل لصندوقك، وأمازون يعتبره حساباً مستقلاً تماماً في الحظر والطلبات.</small>
+        </label>
+
+        <label class="field">
+          <span>تسمية الحساب (اختياري)</span>
+          <input id="dotted-label-input" placeholder="مثال: حساب أمازون رقم 2">
+        </label>
+
+        <button class="submit-button primary-btn" id="submit-amazon-dotted-btn" type="submit" style="margin-top: 6px; justify-content: center;">
+          <span>اعتماد الحساب في مركز أمازون</span>
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        </button>
+      </form>
     </article>
   </div>
 
   <div class="confirm-popover hidden" id="confirm-delete"><strong>حذف هذا الصندوق؟</strong><p>سيتم حذف رسائله المحفوظة أيضًا.</p><div><button id="cancel-delete">إلغاء</button><button class="danger" id="accept-delete">حذف</button></div></div>
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
-  <script src="/app.js?v=26" defer></script>
+  <script src="/app.js?v=30" defer></script>
 </body>
 </html>

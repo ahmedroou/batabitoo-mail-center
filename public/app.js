@@ -1,6 +1,6 @@
 'use strict';
 
-const API_BASE = /(?:web\.app|firebaseapp\.com)$/.test(location.hostname) ? 'https://inbox-api.batabitoo.com' : '';
+const API_BASE = 'https://inbox-api.batabitoo.com';
 let readerRequest = 0;
 let stopReaderResize = () => {};
 let readerReturnScroll = 0;
@@ -78,8 +78,10 @@ const state = {
   inboxType: 'official',
   view: 'current',
   createType: 'official',
+  officialDomainFilter: 'all',
   amazonView: 'accounts',
   amazonAccountFilter: 'all',
+  amazonDomainFilter: 'all',
   amazonSubFilter: 'all',
   amazonSelectedInbox: null,
   activeMessageList: [],
@@ -88,6 +90,7 @@ const state = {
   temp: [],
   amazon: [],
   banned: [],
+  suspected: [],
   messages: [],
   officialMessages: [],
   tempMessages: [],
@@ -138,10 +141,719 @@ function returnToMainInbox() {
 
 const $ = id => document.getElementById(id);
 
+const SESSION_TOKEN_KEY = 'batabitoo_session_token';
+const PIN_KEY = 'batabitoo_master_pin_v1';
+let enteredPin = '';
+let appStarted = false;
+
+async function startMainApp() {
+  if (appStarted) return;
+  appStarted = true;
+  await refreshEverything();
+  setInterval(() => {
+    if (!document.hidden && state.view === 'current' && !state.currentMessage) loadCurrent(true);
+  }, 8000);
+}
+
+function setupPinLock() {
+  const overlay = $('pin-lock-overlay');
+  const card = $('pin-lock-card');
+  const dots = document.querySelectorAll('#pin-dots .pin-dot');
+  const hiddenInput = $('pin-input');
+  const errorMsg = $('pin-error-msg');
+  const lockBtn = $('lock-app-btn');
+
+  if (!overlay) return;
+
+  function updateDots() {
+    dots.forEach((dot, idx) => {
+      dot.classList.toggle('filled', idx < enteredPin.length);
+    });
+  }
+
+  function showError(msg = '⚠️ رمز الأمان غير صحيح! حاول مرة أخرى') {
+    if (errorMsg) {
+      errorMsg.textContent = msg;
+      errorMsg.classList.remove('hidden');
+    }
+    if (card) {
+      card.classList.add('shake');
+      setTimeout(() => card.classList.remove('shake'), 400);
+    }
+    enteredPin = '';
+    if (hiddenInput) hiddenInput.value = '';
+    updateDots();
+  }
+
+  function unlock() {
+    sessionStorage.setItem(PIN_KEY, 'unlocked');
+    localStorage.setItem(PIN_KEY, 'unlocked');
+    document.documentElement.classList.add('pin-pre-unlocked');
+    overlay.classList.add('unlocked');
+    if (errorMsg) errorMsg.classList.add('hidden');
+    toast('مرحباً بك! تم إلغاء القفل بنجاح 🔓');
+    startMainApp();
+  }
+
+  async function checkPin() {
+    const pinToCheck = enteredPin;
+    enteredPin = '';
+    updateDots();
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ pin: pinToCheck })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        if (data.token) {
+          sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
+          localStorage.setItem(SESSION_TOKEN_KEY, data.token);
+        }
+        unlock();
+      } else {
+        showError(data.error || '⚠️ رمز الأمان غير صحيح! حاول مرة أخرى');
+      }
+    } catch (err) {
+      showError('⚠️ تعذر الاتصال بالسيرفر للتحقق من رمز الأمان');
+    }
+  }
+
+  function addDigit(digit) {
+    if (enteredPin.length < 4) {
+      enteredPin += digit;
+      updateDots();
+      if (enteredPin.length === 4) {
+        setTimeout(checkPin, 80);
+      }
+    }
+  }
+
+  function deleteDigit() {
+    if (enteredPin.length > 0) {
+      enteredPin = enteredPin.slice(0, -1);
+      updateDots();
+      if (errorMsg) errorMsg.classList.add('hidden');
+    }
+  }
+
+  function clearDigits() {
+    enteredPin = '';
+    updateDots();
+    if (errorMsg) errorMsg.classList.add('hidden');
+  }
+
+  // Keypad clicks
+  document.querySelectorAll('#pin-keypad .pin-key[data-digit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      addDigit(btn.getAttribute('data-digit'));
+    });
+  });
+
+  $('pin-key-del')?.addEventListener('click', deleteDigit);
+  $('pin-key-clear')?.addEventListener('click', clearDigits);
+
+  // Keyboard input
+  document.addEventListener('keydown', (e) => {
+    if (overlay.classList.contains('unlocked')) return;
+    if (e.key >= '0' && e.key <= '9') {
+      addDigit(e.key);
+    } else if (e.key === 'Backspace') {
+      deleteDigit();
+    } else if (e.key === 'Escape') {
+      clearDigits();
+    }
+  });
+
+  // Tap dots or card to focus hidden input
+  $('pin-dots')?.addEventListener('click', () => {
+    hiddenInput?.focus();
+  });
+  hiddenInput?.addEventListener('input', () => {
+    const val = hiddenInput.value.replace(/\D/g, '').slice(0, 4);
+    enteredPin = val;
+    updateDots();
+    if (enteredPin.length === 4) {
+      setTimeout(checkPin, 80);
+    }
+  });
+
+  // Lock button in topbar
+  lockBtn?.addEventListener('click', async () => {
+    try {
+      const token = localStorage.getItem(SESSION_TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY);
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        credentials: 'include'
+      });
+    } catch (_) {}
+    sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+    sessionStorage.removeItem(PIN_KEY);
+    localStorage.removeItem(PIN_KEY);
+    document.cookie = "batabitoo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+    document.cookie = "batabitoo_pin=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+    document.documentElement.classList.remove('pin-pre-unlocked');
+    enteredPin = '';
+    updateDots();
+    overlay.classList.remove('unlocked');
+    toast('تم قفل الموقع برمز الأمان 🔒');
+  });
+
+  // Verify existing session with server on startup
+  async function checkExistingSession() {
+    const token = localStorage.getItem(SESSION_TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/check`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        credentials: 'include'
+      });
+      if (res.ok) {
+        document.documentElement.classList.add('pin-pre-unlocked');
+        overlay.classList.add('unlocked');
+        startMainApp();
+        return;
+      }
+    } catch (_) {}
+
+    document.documentElement.classList.remove('pin-pre-unlocked');
+    overlay.classList.remove('unlocked');
+    setTimeout(() => hiddenInput?.focus(), 300);
+  }
+
+  checkExistingSession();
+}
+
+const GOOGLE_CLIENT_ID = '13228089590-38ofl0b0j69oqqr1bmr9s6mg0hbdv56n.apps.googleusercontent.com';
+const GMAIL_SYNC_INTERVAL_MS = 7000;
+const gmailSyncRuns = new Map();
+const gmailSyncLastAt = new Map();
+const gmailAuthWarnings = new Set();
+let currentLoadRequest = 0;
+
+function decodeBase64Url(str) {
+  if (!str) return '';
+  let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4) base64 += '=';
+  try {
+    return decodeURIComponent(escape(atob(base64)));
+  } catch (e) {
+    try {
+      return atob(base64);
+    } catch (e2) {
+      return str;
+    }
+  }
+}
+
+function extractOtpFromText(text, subject) {
+  const input = `${subject || ''}\n${text || ''}`;
+  const match = input.match(/(?:رمز\s*(?:التحقق|التأكيد|التفعيل|الدخول|الأمان|المرور)|كود\s*(?:التحقق|التأكيد|التفعيل|الدخول)|verification\s*code|security\s*code|one-time\s*(?:password|code)|\botp\b|your\s*code|access\s*code|password\s*reset\s*code)[^\d\n]{0,60}[\s:=-]*([0-9]{4,8})\b/i);
+  if (match) return match[1];
+  const lines = input.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^[0-9]{4,8}$/.test(trimmed)) return trimmed;
+  }
+  const hyphenated = input.match(/(?:code|otp|رمز|كود)[^\d\n]{0,30}([0-9]{3}[\s-][0-9]{3})/i);
+  if (hyphenated) return hyphenated[1].replace(/[\s-]/g, '');
+  return null;
+}
+
+function extractCleanEmail(str) {
+  if (!str) return '';
+  const matchAngle = String(str).match(/<([^>]+)>/);
+  if (matchAngle) return matchAngle[1].trim().toLowerCase();
+  const matchPlain = String(str).match(/[a-zA-Z0-9_\.\+\-]+@[a-zA-Z0-9_\.\-]+\.[a-zA-Z]{2,}/);
+  if (matchPlain) return matchPlain[0].trim().toLowerCase();
+  return String(str).trim().toLowerCase();
+}
+
+function generateDottedVariants(email, max = 12) {
+  if (!email || !email.includes('@')) return [];
+  const [user, domain] = email.split('@');
+  const base = user.replace(/\./g, '');
+  if (base.length < 2) return [];
+  const variants = [];
+  for (let i = 1; i < base.length && variants.length < max; i++) {
+    const variant = base.slice(0, i) + '.' + base.slice(i) + '@' + domain;
+    if (variant.toLowerCase() !== email.toLowerCase()) {
+      variants.push(variant.toLowerCase());
+    }
+  }
+  return variants;
+}
+
+// ============================================================
+// 🤖 AUTO-DISCOVERY ENGINE FOR DOTTED GMAIL AMAZON ACCOUNTS
+// Detects when an Amazon account was created with a dotted variant
+// of ANY connected Gmail account and registers it automatically!
+// ============================================================
+const AUTO_DOTTED_KEY = 'batabitoo_auto_discovered_dotted_v2';
+const notifiedDottedAccounts = new Set();
+
+function getStoredDottedInboxes() {
+  try {
+    const raw = localStorage.getItem(AUTO_DOTTED_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveStoredDottedInboxes(list) {
+  try {
+    localStorage.setItem(AUTO_DOTTED_KEY, JSON.stringify(list));
+  } catch (e) {}
+}
+
+function getConnectedGmailHosts() {
+  const list = state.official || [];
+  return list.filter(i => {
+    const email = String(i.email || '').toLowerCase().trim();
+    return email.endsWith('@gmail.com') && !i.isDottedGmailAlias;
+  });
+}
+
+function detectDottedAliasForHost(targetEmail, hosts = null) {
+  if (!targetEmail) return null;
+  const clean = extractCleanEmail(targetEmail).toLowerCase().trim();
+  if (!clean.endsWith('@gmail.com')) return null;
+  const [userPart] = clean.split('@');
+  const baseUser = userPart.replace(/\./g, '');
+  if (!baseUser) return null;
+
+  const candidateHosts = hosts || getConnectedGmailHosts();
+  for (const host of candidateHosts) {
+    const hostEmail = String(host.email || '').toLowerCase().trim();
+    const [hostUser] = hostEmail.split('@');
+    const hostBase = hostUser.replace(/\./g, '');
+    if (hostBase === baseUser) {
+      const isDotted = clean !== hostEmail || userPart.includes('.');
+      return {
+        host,
+        dottedEmail: clean,
+        baseUser,
+        isDotted
+      };
+    }
+  }
+  return null;
+}
+
+function registerAutoDiscoveredDottedInbox(dottedEmail, hostInbox, originMessage = null) {
+  if (!dottedEmail || !hostInbox) return null;
+  const cleanEmail = dottedEmail.toLowerCase().trim();
+  const parentEmail = String(hostInbox.email || '').toLowerCase().trim();
+  const docId = `gmail_amz_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+
+  const displayName = `أمازون (${cleanEmail.split('@')[0]})`;
+  const newRecord = {
+    id: docId,
+    email: cleanEmail,
+    domain: 'gmail.com',
+    host: 'Gmail (Amazon Dotted Auto-Discovered)',
+    isOfficial: true,
+    isAmazon: true,
+    isDottedGmailAlias: true,
+    parentEmail: parentEmail,
+    banStatus: 'none',
+    isBanned: false,
+    type: 'official',
+    label: displayName,
+    personName: displayName,
+    createdAt: originMessage?.createdAt || new Date().toISOString(),
+    messageCount: originMessage ? 1 : 0,
+    autoDiscovered: true
+  };
+
+  // 1. Update persistent localStorage cache
+  const stored = getStoredDottedInboxes();
+  const existingStoredIdx = stored.findIndex(s => s.email === cleanEmail);
+  if (existingStoredIdx >= 0) {
+    stored[existingStoredIdx] = { ...stored[existingStoredIdx], ...newRecord };
+  } else {
+    stored.push(newRecord);
+  }
+  saveStoredDottedInboxes(stored);
+
+  // 2. Update state in memory
+  let isNew = false;
+  if (!state.official) state.official = [];
+  if (!state.amazon) state.amazon = [];
+
+  const offIdx = state.official.findIndex(i => (i.email || '').toLowerCase() === cleanEmail);
+  if (offIdx >= 0) {
+    state.official[offIdx] = { ...state.official[offIdx], ...newRecord };
+  } else {
+    state.official.unshift(newRecord);
+    isNew = true;
+  }
+
+  const amzIdx = state.amazon.findIndex(i => (i.email || '').toLowerCase() === cleanEmail);
+  if (amzIdx >= 0) {
+    state.amazon[amzIdx] = { ...state.amazon[amzIdx], ...newRecord };
+  } else {
+    state.amazon.unshift(newRecord);
+  }
+
+  // 3. Persist to Backend API
+  api('/api/official/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: cleanEmail,
+      label: displayName,
+      personName: displayName,
+      domain: 'gmail.com'
+    })
+  }).catch(() => {});
+
+  if (isNew && !notifiedDottedAccounts.has(cleanEmail)) {
+    notifiedDottedAccounts.add(cleanEmail);
+    toast(`🎯 تم تلقائياً اكتشاف وتفعيل حساب أمازون نقطي جديد: ${cleanEmail}`);
+    renderInboxes();
+    if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
+    if ($('official-count')) $('official-count').textContent = formatNumber(state.official.length);
+    if ($('amazon-stat-inboxes')) $('amazon-stat-inboxes').textContent = formatNumber(state.amazon.length);
+  }
+
+  return newRecord;
+}
+
+function scanAndAutoDiscoverDottedAccounts(messagesList = null) {
+  const hosts = getConnectedGmailHosts();
+  if (!hosts.length) return;
+
+  const msgs = messagesList || [
+    ...(state.messages || []),
+    ...(state.officialMessages || []),
+    ...(state.amazonMessages || [])
+  ];
+
+  for (const m of msgs) {
+    const candidates = new Set();
+    if (m.exactRecipient) candidates.add(m.exactRecipient);
+    if (m.inboxEmail) candidates.add(m.inboxEmail);
+    if (m.to) {
+      const c = extractCleanEmail(m.to);
+      if (c) candidates.add(c);
+    }
+    if (m.deliveredTo) {
+      const c = extractCleanEmail(m.deliveredTo);
+      if (c) candidates.add(c);
+    }
+
+    const textSnippet = `${m.subject || ''} ${m.intro || ''} ${m.text || ''}`.slice(0, 1500);
+    const textMatches = textSnippet.match(/[a-zA-Z0-9\.]+@gmail\.com/gi) || [];
+    textMatches.forEach(em => candidates.add(em.toLowerCase().trim()));
+
+    for (const cand of candidates) {
+      const detected = detectDottedAliasForHost(cand, hosts);
+      if (detected && detected.isDotted) {
+        registerAutoDiscoveredDottedInbox(detected.dottedEmail, detected.host, m);
+      }
+    }
+  }
+}
+
+
+async function syncGmailMessagesDirect(userEmail, accessToken) {
+  if (!accessToken || !userEmail) return 0;
+  try {
+    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=30&q=newer_than:7d', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!listRes.ok) {
+      const error = new Error(listRes.status === 401
+        ? 'انتهت جلسة Google. أعد ربط حساب Gmail لمواصلة الاستقبال الفوري.'
+        : `تعذر الاتصال بـ Gmail (HTTP ${listRes.status})`);
+      error.code = listRes.status === 401 ? 'GMAIL_AUTH_EXPIRED' : 'GMAIL_SYNC_FAILED';
+      throw error;
+    }
+    const listData = await listRes.json();
+    const messages = listData.messages || [];
+    let newCount = 0;
+
+    const importOne = async item => {
+      const docId = `gmail_oauth_${item.id}`;
+
+      const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (msgRes.status === 401) {
+        const error = new Error('انتهت جلسة Google. أعد ربط حساب Gmail لمواصلة الاستقبال الفوري.');
+        error.code = 'GMAIL_AUTH_EXPIRED';
+        throw error;
+      }
+      if (!msgRes.ok) return false;
+      const msgData = await msgRes.json();
+      const headers = msgData.payload?.headers || [];
+      const getHeader = name => (headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '');
+
+      const from = getHeader('From') || 'Google Gmail';
+      const to = getHeader('To') || userEmail;
+      const deliveredTo = getHeader('Delivered-To') || '';
+      const subject = getHeader('Subject') || '(بدون عنوان)';
+      const dateStr = getHeader('Date') || new Date().toISOString();
+
+      const deliveredEmail = extractCleanEmail(deliveredTo);
+      const toEmail = extractCleanEmail(to);
+      let exactRecipient = (deliveredEmail && deliveredEmail.endsWith('@gmail.com')) ? deliveredEmail : (toEmail && toEmail.endsWith('@gmail.com') ? toEmail : userEmail.toLowerCase().trim());
+
+      let textBody = '';
+      let htmlBody = '';
+
+      const extractParts = part => {
+        if (!part) return;
+        if (part.mimeType === 'text/plain' && part.body?.data) {
+          textBody += decodeBase64Url(part.body.data) + '\n';
+        } else if (part.mimeType === 'text/html' && part.body?.data) {
+          htmlBody += decodeBase64Url(part.body.data) + '\n';
+        }
+        if (part.parts && Array.isArray(part.parts)) {
+          part.parts.forEach(extractParts);
+        }
+      };
+
+      if (msgData.payload) {
+        extractParts(msgData.payload);
+      }
+      if (!textBody && !htmlBody && msgData.snippet) {
+        textBody = msgData.snippet;
+      }
+
+      // Check if body or subject specifically mentions an Amazon dotted email address
+      const hostBase = userEmail.split('@')[0].replace(/\./g, '').toLowerCase();
+      const bodyEmails = (textBody + ' ' + htmlBody + ' ' + subject).match(/[a-zA-Z0-9\.]+@gmail\.com/gi) || [];
+      for (const cand of bodyEmails) {
+        const cleanCand = cand.toLowerCase().trim();
+        const candBase = cleanCand.split('@')[0].replace(/\./g, '');
+        if (candBase === hostBase && cleanCand.includes('.')) {
+          exactRecipient = cleanCand;
+          break;
+        }
+      }
+
+      const otp = extractOtpFromText(textBody, subject) || '';
+      const isAmazon = /amazon|أمازون|امازون|إمازون/i.test(from) || /amazon|أمازون|امازون|إمازون/i.test(subject) || /amazon/i.test(textBody);
+
+      let createdAtIso = new Date().toISOString();
+      try {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) createdAtIso = d.toISOString();
+      } catch (e) {}
+
+      const msgPayload = {
+        id: docId,
+        inboxEmail: exactRecipient,
+        from: from,
+        to: to,
+        parentEmail: userEmail.toLowerCase().trim(),
+        subject: subject,
+        intro: (textBody || msgData.snippet || '').slice(0, 150),
+        text: textBody.slice(0, 30000),
+        html: htmlBody.slice(0, 30000),
+        otp: otp,
+        isOfficialDomain: true,
+        domain: 'gmail.com',
+        isRealGmail: true,
+        isAmazon: isAmazon,
+        isBanned: false,
+        createdAt: createdAtIso
+      };
+
+      await api('/api/inbound', {
+        method: 'POST',
+        body: JSON.stringify(msgPayload)
+      }).catch(() => {});
+
+      // Auto-discover and register dotted Amazon account if applicable
+      const detectedDotted = detectDottedAliasForHost(exactRecipient);
+      if (detectedDotted && detectedDotted.isDotted) {
+        registerAutoDiscoveredDottedInbox(detectedDotted.dottedEmail, detectedDotted.host, { createdAt: createdAtIso });
+      }
+
+      return true;
+    };
+
+    // Bounded parallelism keeps the first sync fast without flooding Gmail/Firestore.
+    for (let offset = 0; offset < messages.length; offset += 6) {
+      const batch = messages.slice(offset, offset + 6);
+      const results = await Promise.allSettled(batch.map(importOne));
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) newCount++;
+        if (result.status === 'rejected' && result.reason?.code === 'GMAIL_AUTH_EXPIRED') throw result.reason;
+      }
+    }
+    return newCount;
+  } catch (e) {
+    console.warn('Gmail API sync notice:', e.message);
+    throw e;
+  }
+}
+
+function gmailParentEmail(inbox) {
+  return String(inbox?.parentEmail || inbox?.email || '').trim().toLowerCase();
+}
+
+function messageBelongsToInbox(message, inbox) {
+  if (!message || !inbox?.email) return false;
+  const email = String(inbox.email).trim().toLowerCase();
+  const exactRecipient = String(message.exactRecipient || message.inboxEmail || '').trim().toLowerCase();
+  const to = String(message.to || '').toLowerCase();
+  const parent = String(message.parentEmail || '').trim().toLowerCase();
+  if (inbox.isDottedGmailAlias) return exactRecipient === email || to.includes(email);
+  return exactRecipient === email || to.includes(email) || parent === email;
+}
+
+async function syncGmailInbox(inbox, { force = false, notify = false } = {}) {
+  const parentEmail = gmailParentEmail(inbox);
+  if (!parentEmail.endsWith('@gmail.com')) return { status: 'not-gmail', newCount: 0 };
+  const accessToken = localStorage.getItem(`gmail_token_${parentEmail}`);
+  if (!accessToken) return { status: 'not-connected', newCount: 0 };
+
+  const running = gmailSyncRuns.get(parentEmail);
+  if (running) return running;
+  const lastAt = gmailSyncLastAt.get(parentEmail) || 0;
+  if (!force && Date.now() - lastAt < GMAIL_SYNC_INTERVAL_MS) return { status: 'throttled', newCount: 0 };
+
+  const run = syncGmailMessagesDirect(parentEmail, accessToken)
+    .then(newCount => {
+      gmailSyncLastAt.set(parentEmail, Date.now());
+      gmailAuthWarnings.delete(parentEmail);
+      return { status: 'synced', newCount };
+    })
+    .catch(error => {
+      if (error?.code === 'GMAIL_AUTH_EXPIRED') {
+        localStorage.removeItem(`gmail_token_${parentEmail}`);
+        if ((notify || !gmailAuthWarnings.has(parentEmail)) && !document.hidden) {
+          gmailAuthWarnings.add(parentEmail);
+          toast(error.message, 'error');
+        }
+      }
+      throw error;
+    })
+    .finally(() => gmailSyncRuns.delete(parentEmail));
+  gmailSyncRuns.set(parentEmail, run);
+  return run;
+}
+
+async function handleGoogleOAuthSuccess(accessToken) {
+  let userEmail = '';
+  let userName = '';
+
+  // 1. Fetch user profile via UserInfo endpoint
+  try {
+    const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (infoRes.ok) {
+      const infoData = await infoRes.json();
+      userEmail = infoData.email || '';
+      userName = infoData.name || '';
+    }
+  } catch (e) {
+    console.warn('UserInfo fetch warning:', e);
+  }
+
+  // Fallback to Gmail profile if needed
+  if (!userEmail) {
+    try {
+      const userRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (userRes.ok) {
+        const userData = await userRes.json();
+        userEmail = userData.emailAddress || '';
+      }
+    } catch (e) {
+      console.warn('Gmail profile fetch warning:', e);
+    }
+  }
+
+  if (!userEmail) {
+    throw new Error('تعذر قراءة عنوان بريد Gmail من Google. يرجى إعادة المحاولة.');
+  }
+
+  const cleanEmail = userEmail.toLowerCase().trim();
+  const docId = `gmail_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
+  const displayName = userName || cleanEmail.split('@')[0];
+
+  // Save token for manual/auto sync
+  localStorage.setItem(`gmail_token_${cleanEmail}`, accessToken);
+
+  // 2. Save to local backend API
+  try {
+    await api('/api/gmail/oauth/save', {
+      method: 'POST',
+      body: JSON.stringify({ email: cleanEmail, accessToken, docId, personName: displayName })
+    });
+    console.log('✅ Gmail account saved to local backend:', cleanEmail);
+  } catch (e) {
+    console.warn('⚠️ Could not save Gmail to local backend:', e.message);
+  }
+
+  // 4. Optimistically add to UI state
+  const newInboxObj = {
+    id: docId,
+    email: cleanEmail,
+    domain: 'gmail.com',
+    host: 'Gmail (Google Official Real)',
+    isOfficial: true,
+    isAmazon: false,
+    isBanned: false,
+    banStatus: 'none',
+    banReason: '',
+    type: 'official',
+    label: displayName,
+    personName: displayName,
+    isRealGmail: true,
+    gmailAuthType: 'oauth2',
+    createdAt: new Date().toISOString(),
+    messageCount: 0
+  };
+
+  const existingIdx = (state.official || []).findIndex(i => (i.email || '').toLowerCase() === cleanEmail);
+  if (existingIdx >= 0) {
+    state.official[existingIdx] = { ...state.official[existingIdx], ...newInboxObj };
+  } else {
+    state.official.unshift(newInboxObj);
+  }
+  state.activeId = docId;
+  state.activeInbox = newInboxObj;
+  state.inboxType = 'official';
+  document.querySelectorAll('[data-inbox-type]').forEach(item => item.classList.toggle('active', item.dataset.inboxType === 'official'));
+  renderInboxes();
+
+  toast('جاري فحص ومزامنة الرسائل الحديثة من Gmail... ⏳');
+  let newMsgs = 0;
+  try {
+    newMsgs = await syncGmailMessagesDirect(cleanEmail, accessToken);
+  } catch (syncErr) {
+    console.warn('Gmail sync notice:', syncErr);
+  }
+
+  closeModal('create');
+  toast(`تم ربط حساب Google (${cleanEmail}) بنجاح ومزامنة ${newMsgs} رسالة! 🟢`);
+
+  await loadInboxes();
+  state.activeId = docId;
+  state.activeInbox = findInboxById(docId) || findInboxByEmail(cleanEmail) || newInboxObj;
+  await loadCurrent(true);
+}
+
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   bindEvents();
+  setupPinLock();
   placeHero();
   mobileLayout.addEventListener('change', placeHero);
   const hour = new Date().getHours();
@@ -149,7 +861,7 @@ async function init() {
   updateActiveInbox();
   if ('caches' in window) {
     caches.keys().then(names => {
-      names.forEach(n => { if (n !== 'batabitoo-mail-v25-nocache') caches.delete(n); });
+      names.forEach(n => { if (n !== 'batabitoo-mail-v29-nocache') caches.delete(n); });
     }).catch(() => {});
   }
   if ('serviceWorker' in navigator) {
@@ -161,16 +873,17 @@ async function init() {
   if (urlParams.get('gmail_connected')) {
     const linkedEmail = urlParams.get('email') || 'Gmail';
     toast(`تم ربط حساب Google (${linkedEmail}) بنجاح ومزامنة الرسائل جارية! 🟢`);
-    window.history.replaceState({}, document.title, window.location.pathname);
-  } else if (urlParams.get('gmail_error')) {
-    toast(`تعذر ربط حساب Google: ${urlParams.get('gmail_error')}`, 'error');
-    window.history.replaceState({}, document.title, window.location.pathname);
+    window.history.replaceState({}, document.title, '/');
+  } else if (urlParams.get('gmail_error') || urlParams.get('error')) {
+    const errText = urlParams.get('gmail_error') || urlParams.get('error');
+    toast(`تعذر ربط حساب Google: ${errText}`, 'error');
+    window.history.replaceState({}, document.title, '/');
+  } else if (urlParams.get('code')) {
+    // Authorization codes must be exchanged on a trusted backend, never with a
+    // client secret embedded in the browser bundle.
+    toast('تعذر إكمال الربط القديم بأمان. استخدم زر تسجيل الدخول إلى Google مرة أخرى.', 'error');
+    window.history.replaceState({}, document.title, '/');
   }
-
-  await refreshEverything();
-  setInterval(() => {
-    if (!document.hidden && state.view === 'current' && !state.currentMessage) loadCurrent(true);
-  }, 8000);
 }
 
 function bindEvents() {
@@ -190,6 +903,25 @@ function bindEvents() {
     $('inbox-search').value = '';
     document.querySelectorAll('[data-inbox-type]').forEach(item => item.classList.toggle('active', item === button));
     renderInboxes();
+  });
+
+  // Official sub-domain tabs (All vs Batabitoo vs Gmail)
+  $('official-sub-selector')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-official-filter]');
+    if (!btn) return;
+    state.officialDomainFilter = btn.dataset.officialFilter || 'all';
+    document.querySelectorAll('#official-sub-selector .sub-tab-pill').forEach(b => b.classList.toggle('active', b === btn));
+    renderInboxes();
+  });
+
+  // Amazon sub-domain tabs (All vs Batabitoo vs Gmail & Dotted)
+  $('amazon-domain-selector')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-amazon-domain]');
+    if (!btn) return;
+    state.amazonDomainFilter = btn.dataset.amazonDomain || 'all';
+    document.querySelectorAll('#amazon-domain-selector .sub-tab-pill').forEach(b => b.classList.toggle('active', b === btn));
+    amazonAccountLimit = 24;
+    renderAmazonInboxesReel();
   });
   $('content-tabs').addEventListener('click', event => {
     const button = event.target.closest('[data-view]');
@@ -300,6 +1032,7 @@ function bindEvents() {
     else switchContentView('amazon');
   });
   $('amazon-quick-create-btn')?.addEventListener('click', createQuickAmazonInbox);
+  $('amazon-add-dotted-btn')?.addEventListener('click', openAmazonDottedModal);
   $('amazon-copy-active-btn')?.addEventListener('click', () => copyText(state.activeInbox?.email, 'تم نسخ عنوان البريد النشط'));
   $('amazon-refresh-btn')?.addEventListener('click', refreshAmazonHub);
   $('amazon-search')?.addEventListener('input', () => {
@@ -316,7 +1049,7 @@ function bindEvents() {
     const stat = event.target.closest('.amazon-stat-tile[data-amazon-view]');
     if (stat) setAmazonView(stat.dataset.amazonView, stat.dataset.accountFilter || 'all');
   });
-  $('amazon-inboxes-reel')?.addEventListener('click', event => {
+  $('amazon-inboxes-reel')?.addEventListener('click', async event => {
     if (event.target.closest('#reel-quick-add')) {
       createQuickAmazonInbox();
       return;
@@ -330,8 +1063,10 @@ function bindEvents() {
     if (copy) { copyText(decodeURIComponent(copy.dataset.amazonCopy), 'تم نسخ عنوان البريد'); return; }
     const messages = event.target.closest('[data-amazon-messages]');
     if (messages) {
-      state.amazonSelectedInbox = decodeURIComponent(messages.dataset.amazonMessages);
-      setAmazonView('messages', 'all');
+      const email = decodeURIComponent(messages.dataset.amazonMessages);
+      const inbox = findInboxByEmail(email);
+      if (inbox) await selectInbox(inbox.id);
+      else toast('تعذر العثور على صندوق Gmail المحدد', 'error');
       return;
     }
     const confirm = event.target.closest('[data-confirm-ban]');
@@ -339,7 +1074,9 @@ function bindEvents() {
     const safe = event.target.closest('[data-mark-safe]');
     if (safe) { updateBanStatus(safe.dataset.markSafe, 'safe'); return; }
     const ai = event.target.closest('[data-ai-verify]');
-    if (ai) triggerAiVerify(ai);
+    if (ai) { triggerAiVerify(ai); return; }
+    const account = event.target.closest('.amazon-account-card[data-account-id]');
+    if (account) await selectInbox(account.dataset.accountId);
   });
   $('amazon-message-list')?.addEventListener('click', event => {
     if (event.target.closest('[data-amazon-messages-more]')) {
@@ -425,6 +1162,72 @@ function bindEvents() {
     if (event.target === backdrop) backdrop.classList.add('hidden');
   }));
 
+  // Amazon Dotted Modal Events
+  $('close-amazon-dotted-modal')?.addEventListener('click', () => {
+    $('amazon-dotted-backdrop')?.classList.add('hidden');
+  });
+
+  $('dotted-suggestions-grid')?.addEventListener('click', (e) => {
+    const chip = e.target.closest('.dotted-chip');
+    if (!chip) return;
+    const variant = chip.dataset.variant;
+    if (!variant) return;
+    document.querySelectorAll('.dotted-chip').forEach(c => c.classList.toggle('active', c === chip));
+    const emailInput = $('dotted-email-input');
+    const labelInput = $('dotted-label-input');
+    if (emailInput) emailInput.value = variant;
+    if (labelInput) labelInput.value = `حساب أمازون (${variant.split('@')[0]})`;
+  });
+
+  $('amazon-dotted-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const parentEmail = $('dotted-parent-select')?.value.trim().toLowerCase();
+    const dottedEmail = $('dotted-email-input')?.value.trim().toLowerCase();
+    const label = $('dotted-label-input')?.value.trim() || `حساب أمازون (${dottedEmail.split('@')[0]})`;
+
+    if (!dottedEmail || !dottedEmail.endsWith('@gmail.com')) {
+      toast('يرجى إدخال عنوان Gmail صالح (@gmail.com)', 'error');
+      return;
+    }
+
+    const baseParent = parentEmail.split('@')[0].replace(/\./g, '');
+    const baseDotted = dottedEmail.split('@')[0].replace(/\./g, '');
+    if (baseParent !== baseDotted) {
+      toast(`البريد النقطي يجب أن يتبع نفس أحرف الحساب المضيف (${baseParent}) لتصلك الرسائل عليه!`, 'error');
+      return;
+    }
+
+    const submitBtn = $('submit-amazon-dotted-btn');
+    setBusy(submitBtn, true, 'جاري اعتماد الحساب في أمازون...');
+
+    try {
+      const docId = `gmail_amz_${dottedEmail.replace(/[^a-z0-9]/g, '_')}`;
+      // Register in backend API
+      await api('/api/official/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: dottedEmail,
+          label: label,
+          isOfficial: true,
+          isAmazon: true,
+          isDottedGmailAlias: true,
+          parentEmail: parentEmail
+        })
+      });
+
+      $('amazon-dotted-backdrop')?.classList.add('hidden');
+      toast(`✅ تم تفعيل حساب أمازون النقطي المستقل: ${dottedEmail}`);
+      await loadInboxes();
+      await loadCounts();
+      renderAmazonHub();
+    } catch (err) {
+      toast(`تعذر حفظ الحساب: ${err.message}`, 'error');
+    } finally {
+      setBusy(submitBtn, false, 'اعتماد الحساب في مركز أمازون');
+    }
+  });
+
   $('create-type').addEventListener('click', event => {
     const button = event.target.closest('[data-create-type]');
     if (!button) return;
@@ -462,116 +1265,46 @@ function bindEvents() {
     }
   });
 
-  // Gmail Sub-method Tabs (App Password vs OAuth)
-  $('gmail-method-tabs')?.addEventListener('click', event => {
-    const tabBtn = event.target.closest('[data-gmail-method]');
-    if (!tabBtn) return;
-    const method = tabBtn.dataset.gmailMethod;
-    document.querySelectorAll('[data-gmail-method]').forEach(b => b.classList.toggle('active', b === tabBtn));
-    if (method === 'app_password') {
-      $('gmail-app-form')?.classList.remove('hidden');
-      $('gmail-oauth-panel')?.classList.add('hidden');
-    } else {
-      $('gmail-app-form')?.classList.add('hidden');
-      $('gmail-oauth-panel')?.classList.remove('hidden');
-    }
-  });
 
-  // Handle Real Gmail App Password Submission
-  $('gmail-app-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = $('gmail-app-name')?.value.trim();
-    const email = $('gmail-app-email')?.value.trim();
-    const appPassword = $('gmail-app-password')?.value.trim();
+  // Gmail Sub-method Tabs: App Password removed — OAuth is the only method
+  // Show OAuth panel by default, hide app password form
+  $('gmail-app-form')?.classList.add('hidden');
+  $('gmail-oauth-panel')?.classList.remove('hidden');
+  $('gmail-method-tabs')?.classList.add('hidden'); // hide tabs entirely
 
-    if (!email || !email.endsWith('@gmail.com')) {
-      toast('يرجى كتابة عنوان بريد Gmail صالح (@gmail.com)', 'error');
-      return;
-    }
-    if (!appPassword || appPassword.replace(/\s+/g, '').length < 16) {
-      toast('كلمة مرور التطبيقات يجب أن تتكون من 16 حرفاً من Google', 'error');
-      return;
-    }
+  // Handle Google OAuth Button
+  $('start-google-oauth-btn')?.addEventListener('click', () => {
+    const oauthBtn = $('start-google-oauth-btn');
+    setBusy(oauthBtn, true, 'جاري الاتصال بـ Google...');
 
-    const submitBtn = $('gmail-app-submit');
-    setBusy(submitBtn, true, 'جاري التحقق والربط بسيرفرات Google...');
     try {
-      let result = null;
-      try {
-        const res = await fetch('/api/gmail/connect-app-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, appPassword, personName: name })
+      if (window.google?.accounts?.oauth2) {
+        const tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email',
+          callback: async (resp) => {
+            setBusy(oauthBtn, false, 'تسجيل الدخول وربط حساب Google');
+            if (resp.error) {
+              toast(`فشل تسجيل الدخول: ${resp.error}`, 'error');
+              return;
+            }
+            if (resp.access_token) {
+              try {
+                await handleGoogleOAuthSuccess(resp.access_token);
+              } catch (err) {
+                toast(`تعذر إتمام ربط الحساب: ${err.message}`, 'error');
+              }
+            }
+          }
         });
-        result = await res.json();
-      } catch (netErr) {
-        try {
-          const directRes = await fetch('http://localhost:3030/api/gmail/connect-app-password', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, appPassword, personName: name })
-          });
-          result = await directRes.json();
-        } catch (e2) {
-          throw new Error('تعذر الاتصال بخادم المزامنة الخلفي. يرجى التأكد من تشغيل الخادم.');
-        }
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+        return;
       }
 
-      if (!result || !result.success) {
-        throw new Error(result?.error || 'تعذر ربط حساب Gmail. تأكد من كلمة مرور التطبيقات.');
-      }
-
-      // Sync record to Firestore
-      const cleanEmail = email.toLowerCase().trim();
-      const docId = `gmail_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`;
-      const firestoreFields = {
-        id: { stringValue: docId },
-        email: { stringValue: cleanEmail },
-        domain: { stringValue: 'gmail.com' },
-        host: { stringValue: 'Gmail (Google Official Real)' },
-        isOfficial: { booleanValue: true },
-        isAmazon: { booleanValue: false },
-        isBanned: { booleanValue: false },
-        banStatus: { stringValue: 'none' },
-        banReason: { stringValue: '' },
-        type: { stringValue: 'official' },
-        label: { stringValue: name || cleanEmail.split('@')[0] },
-        personName: { stringValue: name || cleanEmail.split('@')[0] },
-        isRealGmail: { booleanValue: true },
-        gmailAuthType: { stringValue: 'app_password' },
-        createdAt: { stringValue: new Date().toISOString() },
-        messageCount: { integerValue: "0" }
-      };
-      await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: firestoreFields })
-      }).catch(() => {});
-
-      closeModal('create');
-      toast(`تم ربط ${cleanEmail} بنجاح ومزامنة الرسائل الواردة جارية! 🟢`);
-      state.activeInbox = cleanEmail;
-      await fetchInboxes();
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      setBusy(submitBtn, false, 'ربط واختبار الاتصال فوراً');
-    }
-  });
-
-  // Handle Google OAuth
-  $('start-google-oauth-btn')?.addEventListener('click', async () => {
-    try {
-      const res = await fetch('/api/gmail/oauth/auth-url');
-      const data = await res.json();
-      if (data.success && data.authUrl) {
-        window.location.href = data.authUrl;
-      } else {
-        toast(data.error || 'يرجى حفظ Google Client ID أولاً من الخيارات المتقدمة بالأسفل.', 'error');
-        $('oauth-custom-settings')?.classList.remove('hidden');
-      }
+      throw new Error('تعذر تحميل تسجيل Google الآن. تحقق من الاتصال ثم أعد المحاولة.');
     } catch (e) {
-      toast('تعذر جلب رابط مصادقة Google: ' + e.message, 'error');
+      setBusy(oauthBtn, false, 'تسجيل الدخول وربط حساب Google');
+      toast('تعذر فتح تسجيل الدخول: ' + e.message, 'error');
     }
   });
 
@@ -587,11 +1320,11 @@ function bindEvents() {
       return;
     }
     try {
-      await fetch('/api/gmail/oauth/config', {
+      await fetch(`${API_BASE}/api/gmail/oauth/config?pin=${CORRECT_PIN}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CORRECT_PIN}` },
         body: JSON.stringify({ clientId, clientSecret })
-      });
+      }).catch(() => {});
       toast('تم حفظ إعدادات Google OAuth بنجاح!');
     } catch (e) {
       toast('تعذر حفظ الإعدادات: ' + e.message, 'error');
@@ -638,7 +1371,7 @@ function bindEvents() {
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
-    const row = event.target.closest('article[data-inbox-id], article[data-message-id]');
+    const row = event.target.closest('article[data-inbox-id], article[data-message-id], article[data-account-id]');
     if (row && event.target === row) { event.preventDefault(); row.click(); }
   });
   document.addEventListener('keydown', event => {
@@ -666,171 +1399,58 @@ function bindEvents() {
   });
 }
 
-function parseFirestoreDoc(doc) {
-  if (!doc || !doc.fields) return {};
-  const fields = doc.fields;
-  const res = {};
-  for (const key of Object.keys(fields)) {
-    const val = fields[key];
-    if (val.stringValue !== undefined) res[key] = val.stringValue;
-    else if (val.booleanValue !== undefined) res[key] = val.booleanValue;
-    else if (val.integerValue !== undefined) res[key] = parseInt(val.integerValue, 10);
-    else if (val.doubleValue !== undefined) res[key] = parseFloat(val.doubleValue);
-    else if (val.nullValue !== undefined) res[key] = null;
-    else if (val.arrayValue !== undefined) res[key] = (val.arrayValue.values || []).map(v => v.stringValue !== undefined ? v.stringValue : v.integerValue !== undefined ? parseInt(v.integerValue, 10) : v);
-    else if (val.mapValue !== undefined) res[key] = val.mapValue.fields;
-  }
-  const name = doc.name || '';
-  if (!res.id) res.id = name.split('/').pop() || '';
-  return res;
+function mergeMessages(...lists) {
+  const merged = new Map();
+  lists.flat().filter(Boolean).forEach(message => {
+    const key = message.id || `${message.inboxEmail || message.to}|${message.subject}|${message.createdAt}`;
+    const previous = merged.get(key) || {};
+    merged.set(key, { ...previous, ...message });
+  });
+  return [...merged.values()].sort((a, b) => {
+    const aTime = Date.parse(a.createdAt || a.date || 0) || 0;
+    const bTime = Date.parse(b.createdAt || b.date || 0) || 0;
+    return bTime - aTime;
+  });
 }
 
-async function fetchFirestoreInboxes() {
-  const url = 'https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?pageSize=300';
-  const res = await fetch(url);
-  const data = await res.json();
-  const docs = data.documents || [];
-  const allList = docs.map(parseFirestoreDoc).filter(i => i.email);
-  const official = allList.filter(i => i.isOfficial || i.type === 'official' || (i.email && (i.email.endsWith('@batabitoo.com') || i.email.endsWith('@gmail.com'))));
-  const temp = allList.filter(i => !official.includes(i));
-  const banned = allList.filter(i => (i.banStatus === 'confirmed' || i.isBanned) && (i.isOfficial || i.type === 'official'));
-  const suspected = allList.filter(i => i.banStatus === 'suspected' && (i.isOfficial || i.type === 'official'));
-  const amazon = allList.filter(i => (i.isAmazon || i.banStatus === 'confirmed' || i.banStatus === 'suspected') && (i.isOfficial || i.type === 'official'));
-  return {
-    activeId: official[0]?.id || temp[0]?.id || null,
-    official,
-    temp,
-    amazon,
-    banned,
-    suspected
-  };
-}
-
-async function fetchFirestoreMessages(type = null) {
-  const url = 'https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/messages?pageSize=300';
-  const res = await fetch(url);
-  const data = await res.json();
-  const docs = data.documents || [];
-  const msgList = docs.map(parseFirestoreDoc).filter(m => m.id);
-  const official = msgList.filter(m => m.isOfficialDomain || (m.inboxEmail || m.to || '').endsWith('@batabitoo.com') || (m.inboxEmail || m.to || '').endsWith('@gmail.com'));
-  const temp = msgList.filter(m => !official.includes(m));
-  const banned = msgList.filter(m => m.isBanned);
-  const amazon = msgList.filter(m => m.isAmazon || m.isBanned);
-
-  let returned = msgList;
-  if (type === 'official') returned = official;
-  else if (type === 'temp') returned = temp;
-  else if (type === 'amazon') returned = amazon;
-  else if (type === 'banned') returned = banned;
-
-  return {
-    counts: {
-      total: msgList.length,
-      official: official.length,
-      temp: temp.length,
-      amazon: amazon.length,
-      banned: banned.length
-    },
-    official,
-    temp,
-    amazon,
-    banned,
-    messages: returned
-  };
+function isOfficialMessage(message) {
+  const recipient = String(message.inboxEmail || message.to || '').toLowerCase();
+  return Boolean(message.isOfficialDomain || message.isOfficial || recipient.includes('@gmail.com') || recipient.includes('@batabitoo.com'));
 }
 
 async function api(path, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  const token = localStorage.getItem(SESSION_TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY);
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...(options.headers || {})
+  };
   try {
-    const response = await fetch(API_BASE + path, { ...options, signal: controller.signal });
+    const response = await fetch(API_BASE + path, {
+      ...options,
+      headers,
+      credentials: 'include',
+      signal: controller.signal
+    });
+    if (response.status === 401) {
+      console.warn('🔒 [API 401] Session required or expired');
+      sessionStorage.removeItem(SESSION_TOKEN_KEY);
+      localStorage.removeItem(SESSION_TOKEN_KEY);
+      sessionStorage.removeItem(PIN_KEY);
+      localStorage.removeItem(PIN_KEY);
+      document.cookie = "batabitoo_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+      document.cookie = "batabitoo_pin=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+      document.documentElement.classList.remove('pin-pre-unlocked');
+      const overlay = $('pin-lock-overlay');
+      if (overlay) overlay.classList.remove('unlocked');
+      toast('🔒 انتهت الجلسة، يرجى إدخال رمز الأمان', 'error');
+      throw new Error('Unauthorized: Session required');
+    }
     const data = await response.json().catch(() => ({}));
     if (response.ok) return data;
     throw new Error(data.error || `HTTP ${response.status}`);
-  } catch (err) {
-    try {
-      if (path.startsWith('/api/inboxes')) {
-        return await fetchFirestoreInboxes();
-      }
-      if (path.startsWith('/api/all-messages')) {
-        const urlParams = new URLSearchParams(path.split('?')[1] || '');
-        const type = urlParams.get('type');
-        return await fetchFirestoreMessages(type);
-      }
-      if (path.startsWith('/api/inbox/current')) {
-        const [inboxes, messages] = await Promise.all([fetchFirestoreInboxes(), fetchFirestoreMessages()]);
-        const activeInbox = inboxes.official[0] || inboxes.temp[0] || null;
-        return { inbox: activeInbox, messages: messages.messages };
-      }
-      if (path.startsWith('/api/status')) {
-        const [inboxes, messages] = await Promise.all([fetchFirestoreInboxes(), fetchFirestoreMessages()]);
-        return {
-          status: 'online',
-          cloudConnected: true,
-          counts: {
-            totalInboxes: inboxes.official.length + inboxes.temp.length,
-            official: inboxes.official.length,
-            temp: inboxes.temp.length,
-            amazon: inboxes.amazon.length,
-            banned: inboxes.banned.length,
-            messages: messages.counts.total
-          }
-        };
-      }
-      if (path.startsWith('/api/official/create') && options.body) {
-        const bodyObj = JSON.parse(options.body);
-        const reqDom = (bodyObj.domain || 'batabitoo.com').toLowerCase();
-        const effectiveDomain = reqDom.includes('gmail') ? 'gmail.com' : 'batabitoo.com';
-        const rawPrefix = (bodyObj.prefix || bodyObj.email || 'amazon.acc').toLowerCase().trim();
-        let email = rawPrefix.includes('@') ? rawPrefix : `${rawPrefix.replace(/[^a-z0-9\.]/g, '') || 'amazon.acc'}@${effectiveDomain}`;
-        const cleanName = bodyObj.personName || bodyObj.label || `حساب رسمي (${email.split('@')[0]})`;
-        const docId = `official_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        const record = {
-          id: docId,
-          email: email,
-          domain: effectiveDomain,
-          host: effectiveDomain === 'gmail.com' ? 'Gmail (Google Official)' : 'batabitoo.com (Official Trusted)',
-          isOfficial: true,
-          isAmazon: false,
-          isBanned: false,
-          banStatus: 'none',
-          banReason: '',
-          type: 'official',
-          label: cleanName,
-          personName: cleanName,
-          createdAt: new Date().toISOString(),
-          messageCount: 0
-        };
-        const firestoreFields = {
-          id: { stringValue: docId },
-          email: { stringValue: email },
-          domain: { stringValue: effectiveDomain },
-          host: { stringValue: record.host },
-          isOfficial: { booleanValue: true },
-          isAmazon: { booleanValue: false },
-          isBanned: { booleanValue: false },
-          banStatus: { stringValue: 'none' },
-          banReason: { stringValue: '' },
-          type: { stringValue: 'official' },
-          label: { stringValue: cleanName },
-          personName: { stringValue: cleanName },
-          createdAt: { stringValue: record.createdAt },
-          messageCount: { integerValue: "0" }
-        };
-        const fsRes = await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields: firestoreFields })
-        });
-        if (fsRes.ok) return { success: true, inbox: record };
-      }
-      if (path.startsWith('/api/nivea/logs')) {
-        return [];
-      }
-    } catch (fsErr) {
-      console.error('Firestore API fallback error:', fsErr);
-    }
-    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -857,15 +1477,18 @@ async function refreshEverything() {
 }
 
 async function loadStatus() {
-  const data = await api('/api/status');
-  $('stat-total').textContent = formatNumber(data.counts?.totalInboxes);
-  $('stat-official').textContent = formatNumber(data.counts?.official);
-  $('stat-temp').textContent = formatNumber(data.counts?.temp);
-  if ($('stat-amazon')) $('stat-amazon').textContent = formatNumber(data.counts?.amazon || 0);
-  if ($('stat-banned')) $('stat-banned').textContent = formatNumber(data.counts?.banned || 0);
-  $('stat-messages').textContent = formatNumber(data.counts?.messages);
+  const data = await api('/api/status').catch(() => ({}));
+  const total = Math.max(Number(data.counts?.totalInboxes || 0), (state.official?.length || 0) + (state.temp?.length || 0));
+  const officialCount = Math.max(Number(data.counts?.official || 0), state.official?.length || 0);
+  const tempCount = Math.max(Number(data.counts?.temp || 0), state.temp?.length || 0);
+  if (total > 0) $('stat-total').textContent = formatNumber(total);
+  if (officialCount > 0) $('stat-official').textContent = formatNumber(officialCount);
+  if (tempCount > 0) $('stat-temp').textContent = formatNumber(tempCount);
+  if ($('stat-amazon')) $('stat-amazon').textContent = formatNumber(Math.max(Number(data.counts?.amazon || 0), state.amazon?.length || 0));
+  if ($('stat-banned')) $('stat-banned').textContent = formatNumber(Math.max(Number(data.counts?.banned || 0), state.banned?.length || 0));
+  if (data.counts?.messages !== undefined) $('stat-messages').textContent = formatNumber(data.counts?.messages);
   $('stat-sync').textContent = data.cloudConnected ? 'متصل بسحابة Firebase' : 'يعمل من التخزين المحلي';
-  setConnection(true, data.cloudConnected);
+  setConnection(true, Boolean(data.cloudConnected));
 }
 
 async function updateBanStatus(targetIdOrEmail, banStatus, reason = '') {
@@ -917,39 +1540,7 @@ async function updateBanStatus(targetIdOrEmail, banStatus, reason = '') {
     });
     persisted = true;
   } catch (err) {
-    try {
-      let docIdsToTry = [];
-      if (inbox && inbox.id) docIdsToTry.push(inbox.id);
-      if (targetId && !docIdsToTry.includes(targetId)) docIdsToTry.push(targetId);
-      if (email) {
-        docIdsToTry.push(`inbox_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`);
-      }
-
-      for (const docId of docIdsToTry) {
-        if (!docId) continue;
-        const updateUrl = `https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes/${encodeURIComponent(docId)}?updateMask.fieldPaths=banStatus&updateMask.fieldPaths=isBanned&updateMask.fieldPaths=isAmazon&updateMask.fieldPaths=banReason&updateMask.fieldPaths=banDecisionSource&updateMask.fieldPaths=banDecisionAt`;
-        const res = await fetch(updateUrl, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fields: {
-              banStatus: { stringValue: banStatus },
-              isBanned: { booleanValue: isConfirmed },
-              isAmazon: { booleanValue: true },
-              banReason: { stringValue: effectiveReason },
-              banDecisionSource: { stringValue: 'user' },
-              banDecisionAt: { timestampValue: new Date().toISOString() }
-            }
-          })
-        });
-        if (res.ok) {
-          persisted = true;
-          break;
-        }
-      }
-    } catch (fsErr) {
-      console.error('Firestore REST fallback error:', fsErr);
-    }
+    console.error('Ban status persistence error:', err);
   }
   if (!persisted) {
     await loadInboxes().catch(() => {});
@@ -1072,41 +1663,59 @@ function findInboxByEmail(email) {
 }
 
 async function loadInboxes() {
-  const [data, firestore] = await Promise.all([
-    api('/api/inboxes'),
-    fetchFirestoreInboxes().catch(() => null)
-  ]);
-  const metadata = new Map();
-  for (const inbox of [...(firestore?.official || []), ...(firestore?.temp || [])]) {
-    if (inbox.id) metadata.set(`id:${inbox.id}`, inbox);
-    if (inbox.email) metadata.set(`email:${inbox.email.toLowerCase()}`, inbox);
-  }
+  const data = await api('/api/inboxes').catch(() => ({}));
   const mergeStatus = inbox => {
-    const cloud = metadata.get(`id:${inbox.id}`) || metadata.get(`email:${String(inbox.email || '').toLowerCase()}`);
-    const merged = cloud ? {
-      ...inbox,
-      isAmazon: cloud.isAmazon ?? inbox.isAmazon,
-      isBanned: cloud.isBanned ?? inbox.isBanned,
-      banStatus: cloud.banStatus || inbox.banStatus,
-      banReason: cloud.banReason || inbox.banReason
-    } : inbox;
-    const manual = getManualBanDecision(merged);
-    if (!manual) return merged;
+    const manual = getManualBanDecision(inbox);
+    if (!manual) return inbox;
     return {
-      ...merged,
+      ...inbox,
       banStatus: manual.status,
       isBanned: manual.status === 'confirmed',
       isAmazon: true,
-      banReason: manual.reason || merged.banReason
+      banReason: manual.reason || inbox.banReason
     };
   };
-  state.official = (data.official || firestore?.official || []).map(mergeStatus).map(i => ({
+
+  // Merge official inboxes from backend & persistent cache
+  const officialMap = new Map();
+  // 1. Stored dotted inboxes from persistent cache
+  for (const item of getStoredDottedInboxes()) {
+    if (item.email) officialMap.set(item.email.toLowerCase().trim(), item);
+  }
+  // 2. Start with current state (lowest priority)
+  for (const item of (state.official || [])) {
+    if (item.email) officialMap.set(item.email.toLowerCase().trim(), item);
+  }
+  // 3. API official inboxes (authoritative)
+  for (const item of (data?.official || [])) {
+    if (item.email) {
+      const k = item.email.toLowerCase().trim();
+      officialMap.set(k, { ...(officialMap.get(k) || {}), ...item });
+    }
+  }
+
+  // Auto-discover dotted Gmail accounts from known messages
+  scanAndAutoDiscoverDottedAccounts();
+  for (const item of getStoredDottedInboxes()) {
+    if (item.email) officialMap.set(item.email.toLowerCase().trim(), item);
+  }
+  state.official = Array.from(officialMap.values()).map(mergeStatus).map(i => ({
     ...i,
     isBanned: isConfirmedBanned(i),
     isSuspected: isSuspectedInbox(i),
     isAmazon: isAmazonInbox(i)
   }));
-  state.temp = (data.temp || firestore?.temp || []).map(mergeStatus);
+
+  // Merge temporary inboxes from API
+  const tempMap = new Map();
+  for (const item of (data?.temp || [])) {
+    if (item.email) {
+      const k = item.email.toLowerCase().trim();
+      tempMap.set(k, { ...(tempMap.get(k) || {}), ...item });
+    }
+  }
+  state.temp = Array.from(tempMap.values()).map(mergeStatus);
+
   state.amazon = state.official.filter(i => i.isAmazon).map(i => ({
     ...i,
     isAmazon: true,
@@ -1115,7 +1724,7 @@ async function loadInboxes() {
   }));
   state.banned = state.official.filter(i => isConfirmedBanned(i)).map(i => ({ ...i, isBanned: true, isAmazon: true }));
   state.suspected = state.official.filter(i => isSuspectedInbox(i)).map(i => ({ ...i, isAmazon: true, isSuspected: true }));
-  state.activeId = data.activeId || state.activeId;
+  state.activeId = data?.activeId || state.activeId || state.official[0]?.id || state.temp[0]?.id;
   if (state.activeId) {
     markInboxAsRead(state.activeId);
   }
@@ -1123,39 +1732,113 @@ async function loadInboxes() {
   $('temp-count').textContent = formatNumber(state.temp.length);
   if ($('amazon-count')) $('amazon-count').textContent = formatNumber(state.amazon.length);
   if ($('banned-count')) $('banned-count').textContent = formatNumber(state.banned.length);
+
+  // Sync top stats strip directly
+  $('stat-total').textContent = formatNumber(state.official.length + state.temp.length);
+  $('stat-official').textContent = formatNumber(state.official.length);
+  $('stat-temp').textContent = formatNumber(state.temp.length);
+  if ($('stat-amazon')) $('stat-amazon').textContent = formatNumber(state.amazon.length);
+  if ($('stat-banned')) $('stat-banned').textContent = formatNumber(state.banned.length);
+
   renderInboxes();
 }
 
 async function loadCounts() {
-  const data = await api('/api/all-messages');
-  state.officialMessages = (data.official || []).map(m => ({
+  const serverData = await api('/api/all-messages').catch(() => ({ messages: [] }));
+  const allMessages = mergeMessages(serverData.messages || [], serverData.official || [], serverData.temp || []);
+  const official = allMessages.filter(isOfficialMessage);
+  const temp = allMessages.filter(message => !isOfficialMessage(message));
+
+  state.officialMessages = official.map(m => ({
     ...m,
     isBanned: isBannedMessage(m),
     isAmazon: isAmazonMessage(m)
   }));
-  state.tempMessages = data.temp || [];
-  state.amazonMessages = (data.amazon || state.officialMessages.filter(m => m.isAmazon)).map(m => ({ ...m, isAmazon: true }));
-  state.bannedMessages = (data.banned || state.officialMessages.filter(m => m.isBanned)).map(m => ({ ...m, isBanned: true, isAmazon: true }));
-  $('official-message-count').textContent = formatNumber(data.counts?.official || 0);
-  $('temp-message-count').textContent = formatNumber(data.counts?.temp || 0);
-  if ($('amazon-message-count')) $('amazon-message-count').textContent = formatNumber(data.counts?.amazon || state.amazonMessages.length);
-  if ($('banned-message-count')) $('banned-message-count').textContent = formatNumber(data.counts?.banned || state.bannedMessages.length);
-  if ($('winning-message-count')) $('winning-message-count').textContent = formatNumber(data.counts?.winning || getWinningMessages().length);
-  $('stat-messages').textContent = formatNumber(data.counts?.total || 0);
+  state.tempMessages = temp;
+  state.amazonMessages = state.officialMessages.filter(m => m.isAmazon).map(m => ({ ...m, isAmazon: true }));
+  state.bannedMessages = state.officialMessages.filter(m => m.isBanned).map(m => ({ ...m, isBanned: true, isAmazon: true }));
+
+  // 🤖 Dynamic Auto-discovery across ALL messages in the database
+  scanAndAutoDiscoverDottedAccounts(allMessages);
+
+  $('official-message-count').textContent = formatNumber(state.officialMessages.length);
+  $('temp-message-count').textContent = formatNumber(state.tempMessages.length);
+  if ($('amazon-message-count')) $('amazon-message-count').textContent = formatNumber(state.amazonMessages.length);
+  if ($('banned-message-count')) $('banned-message-count').textContent = formatNumber(state.bannedMessages.length);
+  if ($('winning-message-count')) $('winning-message-count').textContent = formatNumber(getWinningMessages().length);
+  $('stat-messages').textContent = formatNumber(allMessages.length);
   updateFilterUnreadDots();
 }
 
 async function loadCurrent(silent = false) {
+  const requestId = ++currentLoadRequest;
   if (!silent) setBusy($('refresh-current'), true);
   try {
-    const data = await api('/api/inbox/current');
-    state.activeInbox = data.inbox || null;
+    const prevIds = new Set((state.messages || []).map(m => m.id));
+    const hadPrevious = (state.messages || []).length > 0;
+
+    let inbox = state.activeInbox || findInboxById(state.activeId);
+    let messages = [];
+    let gmailSyncStatus = null;
+
+    const isGmail = inbox && (inbox.isRealGmail || (inbox.email && inbox.email.endsWith('@gmail.com')));
+
+    if (isGmail) {
+      const syncResult = await syncGmailInbox(inbox, { force: !silent, notify: !silent }).catch(error => {
+        if (!silent && error?.code !== 'GMAIL_AUTH_EXPIRED') toast(error.message, 'error');
+        return { status: 'failed', newCount: 0 };
+      });
+      gmailSyncStatus = syncResult.status;
+      const allRes = await api('/api/all-messages').catch(() => ({ messages: [] }));
+      const allList = allRes.messages || [];
+      messages = allList.filter(m => messageBelongsToInbox(m, inbox));
+      if (syncResult.newCount > 0) await loadCounts().catch(() => {});
+    } else {
+      try {
+        if (state.activeId && (!inbox || inbox.id !== state.activeId)) {
+          await api('/api/inboxes/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: state.activeId })
+          }).catch(() => {});
+        }
+        const data = await api('/api/inbox/current');
+        if (data && data.inbox) {
+          inbox = data.inbox;
+          messages = data.messages || [];
+        }
+      } catch (err) {
+        if (inbox) {
+          const allRes = await api('/api/all-messages').catch(() => ({ messages: [] }));
+          messages = (allRes.messages || []).filter(m => (m.to || '').includes(inbox.email) || (m.inboxEmail || '').includes(inbox.email));
+        }
+      }
+    }
+
+    // A slower refresh for the previously selected inbox must never overwrite
+    // a newer click/selection.
+    if (requestId !== currentLoadRequest) return;
+    state.activeInbox = inbox || state.activeInbox;
     state.activeId = state.activeInbox?.id || state.activeId;
-    state.messages = (data.messages || []).map(m => ({
+    state.messages = (messages || []).map(m => ({
       ...m,
       isBanned: isBannedMessage(m),
       isAmazon: isAmazonMessage(m)
     }));
+
+    // 🤖 Auto-discover any dotted Amazon accounts from loaded messages
+    scanAndAutoDiscoverDottedAccounts(state.messages);
+
+    // Detect new arriving message automatically
+    if (silent && hadPrevious) {
+      const brandNew = state.messages.filter(m => !prevIds.has(m.id));
+      if (brandNew.length > 0) {
+        const top = brandNew[0];
+        const badge = top.isWinning ? '🏆 إشعار فوز مسابقة!' : '📩 رسالة جديدة وصلت!';
+        toast(`${badge}: "${top.subject || '(بدون عنوان)'}"`);
+      }
+    }
+
     if (state.activeId) {
       markInboxAsRead(state.activeId, state.messages.length);
     }
@@ -1164,12 +1847,19 @@ async function loadCurrent(silent = false) {
     renderInboxes();
     if (state.view === 'current') renderContent();
     setConnection(true);
-    if (!silent) toast('تم فحص البريد الوارد');
+    if (!silent) {
+      if (gmailSyncStatus === 'not-connected') {
+        toast('هذا عنوان Gmail مسجل فقط وليس مربوطًا بـ Google. أعد ربط الحساب من زر «صندوق جديد ← Gmail».', 'error');
+      } else if (gmailSyncStatus !== 'failed') {
+        toast('تم فحص البريد الوارد');
+      }
+    }
   } catch (error) {
+    if (requestId !== currentLoadRequest) return;
     setConnection(false);
     if (!silent) toast(friendlyError(error), true);
   } finally {
-    if (!silent) setBusy($('refresh-current'), false);
+    if (!silent && requestId === currentLoadRequest) setBusy($('refresh-current'), false);
   }
 }
 
@@ -1178,9 +1868,44 @@ async function syncActiveRemoteInbox() {
   const inbox = state.activeInbox || findInboxById(state.activeId);
   const email = inbox?.email;
   if (!email) {
-    toast('يرجى اختيار صندوق بريد سريع أولاً', 'info');
+    toast('يرجى اختيار صندوق بريد أولاً', 'info');
     return;
   }
+
+  // Handle Real Gmail Inboxes
+  if (inbox?.isRealGmail || email.endsWith('@gmail.com')) {
+    setBusy(btn, true, 'جاري مزامنة Gmail... ⚡');
+    try {
+      const directResult = await syncGmailInbox(inbox, { force: true, notify: true });
+      let newCount = directResult.newCount || 0;
+      if (directResult.status === 'not-connected') {
+        const response = await fetch(`${API_BASE}/api/gmail/sync?pin=${CORRECT_PIN}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${CORRECT_PIN}` },
+          body: JSON.stringify({ email: gmailParentEmail(inbox) })
+        });
+        const res = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error('هذا الحساب غير مربوط بخدمة Gmail النشطة. أعد ربطه عبر زر تسجيل الدخول إلى Google.');
+        }
+        newCount = res.newCount || 0;
+      }
+
+      if (newCount > 0) {
+        toast(`🎉 تم سحب ${newCount} رسالة جديدة من Gmail بنجاح!`);
+      } else {
+        toast('صندوق Gmail محدث، لا توجد رسائل جديدة');
+      }
+      await loadCurrent(true);
+      await loadCounts();
+    } catch (err) {
+      toast('تعذر مزامنة Gmail: ' + err.message, 'error');
+    } finally {
+      setBusy(btn, false, 'مزامنة سريعة ⚡');
+    }
+    return;
+  }
+
   setBusy(btn, true, 'جاري السحب... ⚡');
   try {
     const res = await api('/api/inbox/sync', {
@@ -1212,12 +1937,8 @@ async function syncActiveRemoteInbox() {
 async function loadSeparated(type) {
   showContentSkeleton();
   try {
-    const data = await api(`/api/all-messages?type=${encodeURIComponent(type)}`);
-    if (type === 'official') state.officialMessages = (data.messages || []).map(m => ({ ...m, isBanned: isBannedMessage(m), isAmazon: isAmazonMessage(m) }));
-    else if (type === 'amazon') state.amazonMessages = (data.messages || []).map(m => ({ ...m, isAmazon: true }));
-    else if (type === 'banned') state.bannedMessages = (data.messages || []).map(m => ({ ...m, isBanned: true, isAmazon: true }));
-    else if (type === 'winning') state.winningMessages = data.messages || [];
-    else state.tempMessages = data.messages || [];
+    await loadCounts();
+    if (type === 'winning') state.winningMessages = getWinningMessages();
     renderContent();
   } catch (error) {
     showEmpty('تعذر تحميل الرسائل', friendlyError(error));
@@ -1232,7 +1953,29 @@ async function loadLogs(shouldRender = true) {
 }
 
 function renderInboxes() {
-  const source = state.inboxType === 'official' ? state.official : state.inboxType === 'amazon' ? state.amazon : state.inboxType === 'banned' ? state.banned : state.temp;
+  const isOfficialView = state.inboxType === 'official';
+  const subBar = $('official-sub-selector');
+  if (subBar) {
+    subBar.classList.toggle('hidden', !isOfficialView);
+    if (isOfficialView) {
+      const allCount = state.official.length;
+      const batabitooCount = state.official.filter(i => (i.email || '').toLowerCase().endsWith('@batabitoo.com')).length;
+      const gmailCount = state.official.filter(i => i.isRealGmail || (i.email || '').toLowerCase().endsWith('@gmail.com')).length;
+      if ($('sub-count-off-all')) $('sub-count-off-all').textContent = formatNumber(allCount);
+      if ($('sub-count-off-batabitoo')) $('sub-count-off-batabitoo').textContent = formatNumber(batabitooCount);
+      if ($('sub-count-off-gmail')) $('sub-count-off-gmail').textContent = formatNumber(gmailCount);
+    }
+  }
+
+  let source = state.inboxType === 'official' ? state.official : state.inboxType === 'amazon' ? state.amazon : state.inboxType === 'banned' ? state.banned : state.temp;
+  if (isOfficialView) {
+    if (state.officialDomainFilter === 'batabitoo') {
+      source = source.filter(i => (i.email || '').toLowerCase().endsWith('@batabitoo.com'));
+    } else if (state.officialDomainFilter === 'gmail') {
+      source = source.filter(i => i.isRealGmail || (i.email || '').toLowerCase().endsWith('@gmail.com'));
+    }
+  }
+
   const query = normalize($('inbox-search').value);
   const list = query ? source.filter(item => normalize([item.personName, item.label, item.email, item.domain, item.banReason].join(' ')).includes(query)) : source;
   updateFilterUnreadDots();
@@ -1259,7 +2002,7 @@ function renderInboxes() {
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           <strong>${html(label)}</strong>
           ${unread ? '<span class="unread-pill" title="رسائل جديدة غير مقروءة">جديد</span>' : ''}
-          ${(inbox.isRealGmail || inbox.domain === 'gmail.com') ? '<span class="real-gmail-badge" title="حساب Gmail حقيقي بمزامنة حية 24/7">📧 Gmail</span>' : ''}
+          ${inbox.isDottedGmailAlias ? '<span class="real-gmail-badge" style="background:rgba(234,88,12,0.15);color:#ea580c;border-color:rgba(234,88,12,0.3);" title="حساب أمازون نقطي مستكشف تلقائياً">🛒 نقطي أمازون</span>' : (inbox.isRealGmail || inbox.domain === 'gmail.com') ? '<span class="real-gmail-badge" title="حساب Gmail حقيقي بمزامنة حية 24/7">📧 Gmail</span>' : ''}
           ${banned ? `<span class="banned-badge" title="${attr(reason)}">⛔ ${html(reason)}</span>` : suspected ? `<span class="suspected-badge" title="${attr(reason)}">⚠️ اشتباه حظر</span>` : ''}
         </div>
         <span>${html(inbox.email || '')}</span>
@@ -1307,9 +2050,19 @@ function updateActiveInbox() {
 }
 
 async function selectInbox(id) {
-  state.activeId = id;
+  const picked = findInboxById(id);
+  if (!picked) {
+    toast('تعذر العثور على صندوق البريد المحدد. حدّث القائمة وأعد المحاولة.', 'error');
+    return false;
+  }
+  // Invalidate any in-flight refresh before applying the new selection.
+  currentLoadRequest++;
+  state.activeId = picked.id;
+  state.activeInbox = picked;
+  state.messages = [];
   markInboxAsRead(id);
   renderInboxes();
+  updateActiveInbox();
   // Optimistic: show content view immediately with loading skeleton
   switchContentView('current');
   if (innerWidth <= 720) {
@@ -1319,16 +2072,22 @@ async function selectInbox(id) {
   showContentSkeleton();
   placeHero();
   try {
-    await api('/api/inboxes/select', {
+    // Persisting the global server selection is best-effort; Gmail navigation
+    // is local-first and must keep working when the edge endpoint is absent.
+    api('/api/inboxes/select', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id })
-    });
-    await loadCurrent(true);
-    markInboxAsRead(id, state.messages.length);
+      body: JSON.stringify({ id: picked.id })
+    }).catch(() => {});
+    await loadCurrent(false);
+    markInboxAsRead(picked.id, state.messages.length);
     renderInboxes();
+    return true;
   } catch (error) {
-    toast(friendlyError(error), true);
+    console.warn('Select inbox notice:', error);
+    showEmpty('تعذر فتح الصندوق', friendlyError(error));
+    toast(`تعذر فتح الصندوق: ${friendlyError(error)}`, 'error');
+    return false;
   }
 }
 
@@ -1484,6 +2243,14 @@ function getFilteredAmazonAccounts() {
   if (state.amazonAccountFilter === 'healthy') list = list.filter(inbox => !isConfirmedBanned(inbox) && !isSuspectedInbox(inbox));
   else if (state.amazonAccountFilter === 'suspected') list = list.filter(inbox => !isConfirmedBanned(inbox) && isSuspectedInbox(inbox));
   else if (state.amazonAccountFilter === 'banned') list = list.filter(isConfirmedBanned);
+
+  // Apply domain filter (all / batabitoo / gmail)
+  if (state.amazonDomainFilter === 'batabitoo') {
+    list = list.filter(inbox => (inbox.email || '').toLowerCase().endsWith('@batabitoo.com'));
+  } else if (state.amazonDomainFilter === 'gmail') {
+    list = list.filter(inbox => inbox.isRealGmail || inbox.isDottedGmailAlias || (inbox.email || '').toLowerCase().endsWith('@gmail.com'));
+  }
+
   const query = normalize($('amazon-search')?.value);
   if (query) list = list.filter(inbox => normalize([inbox.email, inbox.personName, inbox.label, inbox.banReason].join(' ')).includes(query));
   return list;
@@ -1493,19 +2260,21 @@ function getFilteredAmazonMessages() {
   let list = state.amazonMessages || [];
   if (state.amazonSelectedInbox) {
     const sel = state.amazonSelectedInbox.toLowerCase();
-    list = list.filter(m => (m.inboxEmail || '').toLowerCase() === sel);
+    list = list.filter(m => ((m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase() === sel));
   }
   if (state.amazonSubFilter === 'otp') {
     list = list.filter(m => Boolean(m.otp));
   } else if (state.amazonSubFilter === 'suspected') {
     list = list.filter(m => {
-      const inbox = findInboxByEmail(m.inboxEmail);
+      const recipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+      const inbox = findInboxByEmail(recipient);
       if (inbox && isConfirmedBanned(inbox)) return false;
       return isBannedMessage(m) || isSuspectedInbox(inbox);
     });
   } else if (state.amazonSubFilter === 'banned') {
     list = list.filter(m => {
-      const inbox = findInboxByEmail(m.inboxEmail);
+      const recipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+      const inbox = findInboxByEmail(recipient);
       return isConfirmedBanned(inbox);
     });
   } else if (state.amazonSubFilter === 'orders') {
@@ -1513,7 +2282,7 @@ function getFilteredAmazonMessages() {
   }
   const query = normalize($('amazon-search')?.value);
   if (query) {
-    list = list.filter(m => normalize([formatAddress(m.from), formatAddress(m.to), m.subject, m.text, m.intro, m.otp, m.inboxEmail].join(' ')).includes(query));
+    list = list.filter(m => normalize([formatAddress(m.from), formatAddress(m.to), m.subject, m.text, m.intro, m.otp, m.inboxEmail, m.exactRecipient].join(' ')).includes(query));
   }
   return list;
 }
@@ -1521,6 +2290,21 @@ function getFilteredAmazonMessages() {
 function renderAmazonInboxesReel() {
   const reel = $('amazon-inboxes-reel');
   if (!reel) return;
+
+  const domainSelector = $('amazon-domain-selector');
+  if (domainSelector) {
+    const isAccountsView = state.amazonView === 'accounts';
+    domainSelector.classList.toggle('hidden', !isAccountsView);
+    if (isAccountsView) {
+      const allCount = (state.amazon || []).length;
+      const batabitooCount = (state.amazon || []).filter(i => (i.email || '').toLowerCase().endsWith('@batabitoo.com')).length;
+      const gmailCount = (state.amazon || []).filter(i => i.isRealGmail || i.isDottedGmailAlias || (i.email || '').toLowerCase().endsWith('@gmail.com')).length;
+      if ($('sub-count-amz-all')) $('sub-count-amz-all').textContent = formatNumber(allCount);
+      if ($('sub-count-amz-batabitoo')) $('sub-count-amz-batabitoo').textContent = formatNumber(batabitooCount);
+      if ($('sub-count-amz-gmail')) $('sub-count-amz-gmail').textContent = formatNumber(gmailCount);
+    }
+  }
+
   if (state.amazonView !== 'accounts') { reel.classList.add('hidden'); return; }
   reel.classList.remove('hidden');
   const inboxes = getFilteredAmazonAccounts();
@@ -1535,17 +2319,28 @@ function renderAmazonInboxesReel() {
   }
   reel.innerHTML = visible.map(inbox => {
     const email = inbox.email || '';
-    const count = Math.max(Number(inbox.messageCount || 0), (state.amazonMessages || []).filter(m => (m.inboxEmail || '').toLowerCase() === email.toLowerCase()).length);
+    const isDotted = Boolean(inbox.isDottedGmailAlias || (inbox.parentEmail && inbox.parentEmail.toLowerCase() !== email.toLowerCase()));
+    const parentEmail = inbox.parentEmail || '';
+    const count = Math.max(Number(inbox.messageCount || 0), (state.amazonMessages || []).filter(m => (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase() === email.toLowerCase()).length);
     const label = inbox.personName || inbox.label || email.split('@')[0] || 'حساب أمازون';
     const banned = isConfirmedBanned(inbox);
     const suspected = !banned && isSuspectedInbox(inbox);
     const status = banned ? 'محظور' : suspected ? 'يحتاج مراجعة' : 'سليم';
     const statusClass = banned ? 'banned' : suspected ? 'suspected' : 'healthy';
-    return `<article class="amazon-account-card ${statusClass}" data-account-id="${attr(inbox.id || '')}">
-      <header><div class="amazon-account-avatar">${banned ? '!' : suspected ? '?' : 'a'}</div><div><h4>${html(label)}</h4><span class="amazon-account-status">${html(status)}</span></div><b class="amazon-account-count">${formatNumber(count)} رسالة</b></header>
+    return `<article class="amazon-account-card ${statusClass} ${isDotted ? 'is-dotted-variant' : ''}" data-account-id="${attr(inbox.id || '')}" tabindex="0" role="button" aria-label="فتح صندوق ${attr(email)}">
+      <header>
+        <div class="amazon-account-avatar">${banned ? '!' : suspected ? '?' : isDotted ? '🔵' : 'a'}</div>
+        <div>
+          <h4>${html(label)}</h4>
+          <span class="amazon-account-status">${html(status)}</span>
+          ${isDotted ? `<span class="amz-dotted-tag">🔵 فرع نقطي</span>` : ''}
+        </div>
+        <b class="amazon-account-count">${formatNumber(count)} رسالة</b>
+      </header>
       <button class="amazon-account-email" type="button" data-amazon-copy="${attr(encodeURIComponent(email))}" title="نسخ البريد"><span dir="ltr">${html(email)}</span><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
+      ${isDotted && parentEmail ? `<div class="amz-parent-tag">مرتبط بالحساب المضيف: <span dir="ltr">${html(parentEmail)}</span></div>` : ''}
       ${banned && inbox.banReason ? `<p class="amazon-account-reason">${html(inbox.banReason)}</p>` : ''}
-      ${suspected ? `<div class="amazon-review-actions"><span>هل الحساب محظور فعلًا؟</span><button type="button" data-confirm-ban="${attr(inbox.id)}" data-reason="${attr(inbox.banReason || '')}">تأكيد الحظر</button><button type="button" data-mark-safe="${attr(inbox.id)}">الحساب سليم</button><button type="button" data-ai-verify="${attr(inbox.id)}">فحص AI</button></div>` : ''}
+      ${suspected ? `<div class="amazon-review-actions"><span>هل الحساب محظور فعلًا؟</span><button type="button" data-confirm-ban="${attr(inbox.id || email)}" data-reason="${attr(inbox.banReason || '')}">تأكيد الحظر</button><button type="button" data-mark-safe="${attr(inbox.id || email)}">الحساب سليم</button><button type="button" data-ai-verify="${attr(inbox.id || email)}">فحص AI</button></div>` : ''}
       <footer><button type="button" data-amazon-messages="${attr(encodeURIComponent(email))}">عرض رسائل الحساب <span>←</span></button><time>${html(inbox.createdAt ? formatDate(inbox.createdAt) : '')}</time></footer>
     </article>`;
   }).join('') + (visible.length < inboxes.length ? `<button class="amazon-load-more" type="button" data-amazon-load-more>عرض ${formatNumber(Math.min(24, inboxes.length - visible.length))} حسابًا إضافيًا</button>` : '');
@@ -1576,7 +2371,8 @@ function renderAmazonMessages() {
     const sender = cleanSenderName(message.from, message.subject);
     const otp = message.otp ? String(message.otp) : '';
     const hasBanContent = isBannedMessage(message);
-    const inbox = findInboxByEmail(message.inboxEmail);
+    const recipient = (message.exactRecipient || message.inboxEmail || extractCleanEmail(message.to) || '').toLowerCase().trim();
+    const inbox = findInboxByEmail(recipient);
     const isBanned = isConfirmedBanned(inbox);
     const isSuspected = !isBanned && (hasBanContent || isSuspectedInbox(inbox));
     const reason = getBanReason(message);
@@ -1586,21 +2382,22 @@ function renderAmazonMessages() {
       <div class="sender-avatar">${isBanned ? '⛔' : isSuspected ? '⚠️' : isOrder ? '📦' : '🛒'}</div>
       <div class="message-main">
         <div class="message-top">
-          <strong style="display:inline-flex;align-items:center;gap:6px;">
+          <strong style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
             ${html(sender)}
             ${isBanned ? `<span class="banned-badge">⛔ ${html(reason)}</span>` : isSuspected ? `<span class="suspected-badge">⚠️ اشتباه حظر</span>` : isOrder ? '<span class="order-badge">📦 طلب/شحنة</span>' : '<span class="amazon-badge">أمازون</span>'}
+            ${recipient ? `<span class="amz-msg-recipient" dir="ltr" title="المستلم الفعلي للرسالة">🎯 ${html(recipient)}</span>` : ''}
           </strong>
           <time>${html(formatDate(message.createdAt))}</time>
         </div>
         <div class="message-subject">${html(message.subject || '(بدون عنوان)')}</div>
         <div class="message-preview">${html(message.intro || message.text || formatAddress(message.to) || '')}</div>
-        ${isSuspected && inbox ? `
+        ${isSuspected ? `
         <div class="ban-confirm-inline">
           <span class="ban-confirm-q">اشتباه حظر بانتظار قرارك لتحديد القاعدة:</span>
           <div class="ban-confirm-btns">
             <button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(message.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>
-            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
-            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
+            <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox?.id || recipient)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox?.id || recipient)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
       </div>
@@ -1613,23 +2410,25 @@ function renderAmazonHub() {
   const amzMsgs = state.amazonMessages || [];
   const otps = amzMsgs.filter(m => Boolean(m.otp));
   const suspectedMsgs = amzMsgs.filter(m => {
-    const inbox = findInboxByEmail(m.inboxEmail);
+    const recipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+    const inbox = findInboxByEmail(recipient);
     if (inbox && isConfirmedBanned(inbox)) return false;
     return isBannedMessage(m) || isSuspectedInbox(inbox);
   });
   const bannedMsgs = amzMsgs.filter(m => {
-    const inbox = findInboxByEmail(m.inboxEmail);
+    const recipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+    const inbox = findInboxByEmail(recipient);
     return isConfirmedBanned(inbox);
   });
   const orders = amzMsgs.filter(m => isAmazonOrderMessage(m));
   const healthy = (state.amazon || []).filter(inbox => !isConfirmedBanned(inbox) && !isSuspectedInbox(inbox));
 
-  if ($('amazon-stat-inboxes')) $('amazon-stat-inboxes').textContent = formatNumber(state.amazon.length);
+  if ($('amazon-stat-inboxes')) $('amazon-stat-inboxes').textContent = formatNumber((state.amazon || []).length);
   if ($('amazon-stat-messages')) $('amazon-stat-messages').textContent = formatNumber(amzMsgs.length);
   if ($('amazon-stat-healthy')) $('amazon-stat-healthy').textContent = formatNumber(healthy.length);
   if ($('amazon-stat-otps')) $('amazon-stat-otps').textContent = formatNumber(otps.length);
-  if ($('amazon-stat-suspected')) $('amazon-stat-suspected').textContent = formatNumber(state.suspected.length);
-  if ($('amazon-stat-banned')) $('amazon-stat-banned').textContent = formatNumber(state.banned.length || bannedMsgs.length);
+  if ($('amazon-stat-suspected')) $('amazon-stat-suspected').textContent = formatNumber((state.suspected || []).length);
+  if ($('amazon-stat-banned')) $('amazon-stat-banned').textContent = formatNumber((state.banned || []).length || bannedMsgs.length);
 
   if ($('amazon-nav-count')) $('amazon-nav-count').textContent = formatNumber(amzMsgs.length);
   if ($('amazon-seq-name')) $('amazon-seq-name').textContent = getNextSequentialPrefix('ahmedroou');
@@ -1787,6 +2586,7 @@ async function openMessage(id, pushHistory = true) {
   $('reader-date').textContent = '—';
   $('reader-avatar').textContent = '@';
   $('reader-otp-banner')?.classList.add('hidden');
+  $('reader-image-privacy-bar')?.classList.add('hidden');
   $('reader-notice').classList.add('hidden');
   $('reader-attachments').classList.add('hidden');
   $('reader-attachments').replaceChildren();
@@ -1894,6 +2694,36 @@ async function openMessage(id, pushHistory = true) {
       effectiveHtml = cleanText ? plainDocument(cleanText) : plainDocument('لا يوجد محتوى متوفر لهذه الرسالة.');
     }
 
+    const hasExternalImages = typeof effectiveHtml === 'string' && /<img[^>]+src=["'](?:https?:)?\/\/[^"']+["']/i.test(effectiveHtml);
+    const privacyBar = $('reader-image-privacy-bar');
+    const loadImagesBtn = $('reader-load-images-btn');
+
+    const renderWithImages = (allowExternal) => {
+      let htmlToRender = effectiveHtml;
+      if (!allowExternal && hasExternalImages) {
+        htmlToRender = htmlToRender.replace(/(<img\b[^>]*?)(\bsrc=["'](?:https?:)?\/\/[^"']+["'])([^>]*>)/gi, (m, prefix, srcAttr, suffix) => {
+          return `${prefix}data-original-${srcAttr} src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='1.5'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpath d='m21 15-5-5L5 21'/%3E%3C/svg%3E"${suffix}`;
+        });
+      }
+      if (frame) {
+        frame.srcdoc = htmlToRender;
+      }
+    };
+
+    if (hasExternalImages) {
+      privacyBar?.classList.remove('hidden');
+      if (loadImagesBtn) {
+        loadImagesBtn.onclick = () => {
+          privacyBar?.classList.add('hidden');
+          renderWithImages(true);
+        };
+      }
+      renderWithImages(false);
+    } else {
+      privacyBar?.classList.add('hidden');
+      renderWithImages(true);
+    }
+
     if (frame) {
       frame.onload = () => {
         if (request !== readerRequest) return;
@@ -1921,7 +2751,6 @@ async function openMessage(id, pushHistory = true) {
         document.querySelector('.reader-content-card').setAttribute('aria-busy', 'false');
         $('reader-content-status').textContent = ' ';
       };
-      frame.srcdoc = effectiveHtml;
     }
   } catch (error) {
     if (request !== readerRequest) return;
@@ -1938,6 +2767,7 @@ function closeReader(updateHistory = true) {
   ++readerRequest;
   stopReaderResize();
   state.currentMessage = null;
+  $('reader-image-privacy-bar')?.classList.add('hidden');
   $('reader-shell')?.classList.add('hidden');
   if (state.view === 'amazon') {
     $('amazon-hub-shell')?.classList.remove('hidden');
@@ -1978,6 +2808,48 @@ function openCreateModal() {
   setTimeout(() => $('create-name').focus(), 80);
 }
 
+function openAmazonDottedModal() {
+  const select = $('dotted-parent-select');
+  const grid = $('dotted-suggestions-grid');
+  const emailInput = $('dotted-email-input');
+  const labelInput = $('dotted-label-input');
+  if (!select || !grid || !emailInput) return;
+
+  // Collect linked / official Gmail accounts that are not already dotted aliases
+  const gmailAccounts = (state.official || []).filter(i => (i.email || '').toLowerCase().endsWith('@gmail.com') && !i.isDottedGmailAlias);
+
+  let options = Array.from(new Set(gmailAccounts.map(a => a.email.toLowerCase().trim())));
+  if (!options.length) {
+    options = ['ahmedroou1122@gmail.com'];
+  } else if (!options.includes('ahmedroou1122@gmail.com')) {
+    options.unshift('ahmedroou1122@gmail.com');
+  }
+
+  select.innerHTML = options.map(e => `<option value="${attr(e)}">${html(e)} (حساب Gmail المربوط)</option>`).join('');
+
+  const updateSuggestions = (parentEmail) => {
+    const variants = generateDottedVariants(parentEmail, 10);
+    grid.innerHTML = variants.map((v, idx) => `
+      <button class="dotted-chip ${idx === 0 ? 'active' : ''}" type="button" data-variant="${attr(v)}">
+        <span class="chip-dot">🔵</span>
+        <span class="chip-email" dir="ltr">${html(v)}</span>
+      </button>
+    `).join('');
+
+    if (variants.length > 0) {
+      emailInput.value = variants[0];
+      if (labelInput) labelInput.value = `حساب أمازون (${variants[0].split('@')[0]})`;
+    } else {
+      emailInput.value = parentEmail;
+    }
+  };
+
+  select.onchange = () => updateSuggestions(select.value);
+  updateSuggestions(select.value);
+
+  $('amazon-dotted-backdrop')?.classList.remove('hidden');
+}
+
 function closeModal(type) {
   if (type === 'message') {
     closeReader();
@@ -1997,79 +2869,24 @@ async function createInbox(event) {
   const button = $('create-submit');
   setBusy(button, true, 'جاري إنشاء الصندوق…');
   try {
-    let createdInbox = null;
+    const path = isOfficialType ? '/api/official/create' : '/api/inboxes/create';
+    const cleanPrefix = rawPrefix ? (rawPrefix.includes('@') ? rawPrefix.split('@')[0] : rawPrefix.replace(/[^a-z0-9\.]/g, '')) : '';
+    const email = rawPrefix.includes('@') ? rawPrefix.toLowerCase() : (isGmail && cleanPrefix ? `${cleanPrefix}@gmail.com`.toLowerCase() : undefined);
+    const cleanName = name || (email ? `حساب رسمي (${email.split('@')[0]})` : undefined);
 
-    if (isGmail) {
-      const cleanPrefix = rawPrefix ? (rawPrefix.includes('@') ? rawPrefix.split('@')[0] : rawPrefix.replace(/[^a-z0-9\.]/g, '')) : 'amazon.acc';
-      const email = rawPrefix.includes('@') ? rawPrefix.toLowerCase() : `${cleanPrefix}@gmail.com`.toLowerCase();
-      const cleanName = name || `حساب رسمي (${email.split('@')[0]})`;
-      const docId = `official_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      const record = {
-        id: docId,
-        email: email,
-        domain: 'gmail.com',
-        host: 'Gmail (Google Official)',
-        isOfficial: true,
-        isAmazon: false,
-        isBanned: false,
-        banStatus: 'none',
-        banReason: '',
-        type: 'official',
-        label: cleanName,
+    const data = await api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         personName: cleanName,
-        createdAt: new Date().toISOString(),
-        messageCount: 0
-      };
-      const firestoreFields = {
-        id: { stringValue: docId },
-        email: { stringValue: email },
-        domain: { stringValue: 'gmail.com' },
-        host: { stringValue: 'Gmail (Google Official)' },
-        isOfficial: { booleanValue: true },
-        isAmazon: { booleanValue: false },
-        isBanned: { booleanValue: false },
-        banStatus: { stringValue: 'none' },
-        banReason: { stringValue: '' },
-        type: { stringValue: 'official' },
-        label: { stringValue: cleanName },
-        personName: { stringValue: cleanName },
-        createdAt: { stringValue: record.createdAt },
-        messageCount: { integerValue: "0" }
-      };
-
-      // 1. Sync to local node server if running
-      fetch('http://localhost:3030/api/official/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, prefix: cleanPrefix, domain: 'gmail.com', personName: cleanName, label: cleanName })
-      }).catch(() => {});
-
-      // 2. Save directly to Firestore Cloud REST API
-      const fsRes = await fetch(`https://firestore.googleapis.com/v1/projects/batabitoo-mail-2026/databases/(default)/documents/inboxes?documentId=${docId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: firestoreFields })
-      });
-      if (fsRes.ok) {
-        createdInbox = record;
-      }
-    }
-
-    if (!createdInbox) {
-      const path = isOfficialType ? '/api/official/create' : '/api/inboxes/create';
-      const data = await api(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          personName: name || undefined,
-          label: name || undefined,
-          prefix: rawPrefix || undefined,
-          email: rawPrefix.includes('@') ? rawPrefix : undefined,
-          domain: domain
-        })
-      });
-      createdInbox = data.inbox;
-    }
+        label: cleanName,
+        prefix: cleanPrefix || undefined,
+        email: email,
+        domain: domain,
+        exact: true
+      })
+    });
+    const createdInbox = data.inbox || data;
 
     if (!createdInbox) throw new Error('لم يرجع الخادم صندوقًا جديدًا');
     $('create-modal').classList.add('hidden');
@@ -2217,9 +3034,12 @@ function isAmazonInbox(inbox, messages = null) {
   const meta = [inbox.email, inbox.label, inbox.personName].filter(Boolean).join(' ').toLowerCase();
   if (/amazon|أمازون|امازون|إمازون/i.test(meta)) return true;
 
-  const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
+  const allMsgs = messages || [...(state.messages || []), ...(state.officialMessages || []), ...(state.amazonMessages || []), ...(state.bannedMessages || [])];
   const inboxEmail = String(inbox.email || '').toLowerCase().trim();
-  return allMsgs.some(m => String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail && isAmazonMessage(m));
+  return allMsgs.some(m => {
+    const msgRecipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+    return msgRecipient === inboxEmail && isAmazonMessage(m);
+  });
 }
 
 function isConfirmedBanned(inbox) {
@@ -2233,9 +3053,12 @@ function isSuspectedInbox(inbox, messages = null) {
   if (inbox.banStatus === 'confirmed' || inbox.isBanned === true) return false;
   if (inbox.banStatus === 'suspected') return true;
 
-  const allMsgs = messages || [...state.messages, ...state.officialMessages, ...state.amazonMessages, ...state.bannedMessages];
+  const allMsgs = messages || [...(state.messages || []), ...(state.officialMessages || []), ...(state.amazonMessages || []), ...(state.bannedMessages || [])];
   const inboxEmail = String(inbox.email || '').toLowerCase().trim();
-  return allMsgs.some(m => (String(m.inboxEmail || '').toLowerCase().trim() === inboxEmail || formatAddress(m.to).toLowerCase().includes(inboxEmail)) && isBannedMessage(m));
+  return allMsgs.some(m => {
+    const msgRecipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
+    return msgRecipient === inboxEmail && isBannedMessage(m);
+  });
 }
 
 function isBannedInbox(inbox) {

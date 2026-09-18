@@ -17,6 +17,7 @@ data class AppVersionInfo(
     val latestVersionCode: Int = 1,
     val latestVersionName: String = "1.0.0",
     val downloadUrl: String = "",
+    val sha256: String? = null,
     val releaseNotes: String = "",
     val mandatory: Boolean = false,
     val updatedAt: String = "",
@@ -57,9 +58,14 @@ data class Inbox(
     val type: String = "temp",
     val messageCount: Int = 0,
     val createdAt: String = "",
+    val isRealGmail: Boolean = false,
+    val isDottedGmailAlias: Boolean = false,
+    val parentEmail: String = "",
 ) {
     val isConfirmedBanned: Boolean get() = banStatus == "confirmed" || isBanned
     val isSuspected: Boolean get() = banStatus == "suspected"
+    val isGmailDomain: Boolean get() = isRealGmail || isDottedGmailAlias || email.lowercase().endsWith("@gmail.com")
+    val isBatabitooDomain: Boolean get() = email.lowercase().endsWith("@batabitoo.com")
 }
 
 data class MailMessage(
@@ -122,7 +128,7 @@ object AmazonDetector {
 
     fun isOfficialInbox(inbox: Inbox): Boolean {
         val em = inbox.email.lowercase()
-        return inbox.isOfficial || inbox.type == "official" || em.endsWith("@batabitoo.com") || em.endsWith("@gmail.com")
+        return inbox.isOfficial || inbox.type == "official" || inbox.isRealGmail || inbox.isDottedGmailAlias || em.endsWith("@batabitoo.com") || em.endsWith("@gmail.com")
     }
 
     fun isAmazonMessage(message: MailMessage): Boolean {
@@ -354,6 +360,7 @@ object MailJson {
         val latestCode = root.optInt("latestVersionCode", 1)
         val latestName = root.optString("latestVersionName", "1.0.0")
         val downloadUrl = root.optString("downloadUrl", "")
+        val sha256 = root.optString("sha256").takeIf { it.isNotBlank() }
         val notes = root.optString("releaseNotes", "")
         val mandatory = root.optBoolean("mandatory", false)
         val updatedAt = root.optString("updatedAt", "")
@@ -362,6 +369,7 @@ object MailJson {
             latestVersionCode = latestCode,
             latestVersionName = latestName,
             downloadUrl = downloadUrl,
+            sha256 = sha256,
             releaseNotes = notes,
             mandatory = mandatory,
             updatedAt = updatedAt,
@@ -407,6 +415,9 @@ object MailJson {
         })
         val docName = doc.optString("name", "")
         val id = fields.optStringValue("id").ifBlank { if (docName.contains("/")) docName.split("/").last() else "" }
+        val isRealGmail = fields.optBooleanValue("isRealGmail") || fields.optStringValue("gmailAuthType").isNotBlank() || email.endsWith("@gmail.com", true)
+        val isDotted = fields.optBooleanValue("isDottedGmailAlias")
+        val parent = fields.optStringValue("parentEmail")
         return Inbox(
             id = id,
             email = email,
@@ -422,6 +433,9 @@ object MailJson {
             type = if (official) "official" else "temp",
             messageCount = fields.optIntValue("messageCount"),
             createdAt = fields.optStringValue("createdAt"),
+            isRealGmail = isRealGmail,
+            isDottedGmailAlias = isDotted,
+            parentEmail = parent,
         )
     }
 
@@ -590,6 +604,9 @@ object MailJson {
             it.lowercase().contains("amazon") || it.contains("أمازون") || it.contains("امازون") || it.contains("إمازون")
         })
         val banReason = item.optString("banReason")
+        val isRealGmail = item.optBoolean("isRealGmail") || item.optString("gmailAuthType").isNotBlank() || email.endsWith("@gmail.com", true)
+        val isDotted = item.optBoolean("isDottedGmailAlias")
+        val parent = item.optString("parentEmail")
         return Inbox(
             id = item.optString("id"),
             email = email,
@@ -605,6 +622,9 @@ object MailJson {
             type = if (official) "official" else "temp",
             messageCount = item.optInt("messageCount"),
             createdAt = item.optString("createdAt"),
+            isRealGmail = isRealGmail,
+            isDottedGmailAlias = isDotted,
+            parentEmail = parent,
         )
     }
 

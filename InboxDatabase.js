@@ -5,6 +5,7 @@ const { getFirestore } = require('firebase-admin/firestore');
 
 const content = require('./MailContent');
 const { defaultGemini } = require('./GeminiAI');
+const { mailDatabase } = require('./database');
 
 const DB_FILE = process.env.MAIL_DB_FILE || path.join(__dirname, 'inboxes_db.json');
 const NIVEA_FILE = path.join(__dirname, 'results_nivea_live.json');
@@ -88,53 +89,57 @@ class InboxDatabase {
   }
 
   initLocal() {
-    if (!fs.existsSync(DB_FILE)) {
-      const initialData = {
-        activeInboxId: null,
-        inboxes: [],
-        messages: []
-      };
-      fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2));
-    }
+    // Handled by SQLite database initialization
   }
 
   readLocal() {
     try {
-      if (!fs.existsSync(DB_FILE)) this.initLocal();
-      const content = fs.readFileSync(DB_FILE, 'utf8');
-      return JSON.parse(content);
+      return {
+        activeInboxId: mailDatabase.getActiveInboxId(),
+        inboxes: mailDatabase.getAllInboxes(),
+        messages: mailDatabase.getAllMessages()
+      };
     } catch (err) {
-      console.error('Error reading local DB:', err.message);
+      console.error('Error reading from SQLite DB:', err.message);
       return { activeInboxId: null, inboxes: [], messages: [] };
     }
   }
 
   writeLocal(data) {
     try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+      if (data && data.inboxes && Array.isArray(data.inboxes)) {
+        for (const inbox of data.inboxes) {
+          mailDatabase.saveInbox(inbox);
+        }
+      }
+      if (data && data.messages && Array.isArray(data.messages)) {
+        for (const msg of data.messages) {
+          mailDatabase.saveMessage(msg);
+        }
+      }
+      if (data && data.activeInboxId) {
+        mailDatabase.setActiveInboxId(data.activeInboxId);
+      }
       return true;
     } catch (err) {
-      console.error('Error writing local DB:', err.message);
+      console.error('Error writing to SQLite DB:', err.message);
       return false;
     }
   }
 
-  // Get all inboxes
+  // Get all inboxes from SQLite
   getAllInboxes() {
-    const data = this.readLocal();
-    return data.inboxes || [];
+    return mailDatabase.getAllInboxes();
   }
 
-  // Get Official inboxes (@batabitoo.com and @gmail.com)
+  // Get Official inboxes (@batabitoo.com and @gmail.com) from SQLite
   getOfficialInboxes() {
-    const inboxes = this.getAllInboxes();
-    return inboxes.filter(i => i.isOfficial === true || (i.email && (i.email.toLowerCase().endsWith('@batabitoo.com') || i.email.toLowerCase().endsWith('@gmail.com'))) || i.type === 'official');
+    return mailDatabase.getOfficialInboxes();
   }
 
-  // Get Temporary/Random inboxes
+  // Get Temporary/Random inboxes from SQLite
   getTempInboxes() {
-    const inboxes = this.getAllInboxes();
-    return inboxes.filter(i => !(i.isOfficial === true || (i.email && (i.email.toLowerCase().endsWith('@batabitoo.com') || i.email.toLowerCase().endsWith('@gmail.com'))) || i.type === 'official'));
+    return mailDatabase.getTempInboxes();
   }
 
   isOfficialInbox(inbox) {
@@ -813,32 +818,10 @@ class InboxDatabase {
       }
     }
 
-    // 4. Inactive Temporary Inbox TTL (14 days)
-    const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const activeInboxes = [];
+    // 4. Inactive Temporary Inbox Retention Policy: Preserve all inboxes created by user
+    const activeInboxes = [...inboxes];
     const deletedInboxIds = [];
 
-    for (const inbox of inboxes) {
-      if (this.isOfficialInbox(inbox) || inbox.isAmazon || inbox.isBanned) {
-        activeInboxes.push(inbox);
-      } else {
-        const createdTime = new Date(inbox.createdAt || 0).getTime();
-        const lastChecked = new Date(inbox.lastCheckedAt || inbox.createdAt || 0).getTime();
-        const isExpired = (now - createdTime > FOURTEEN_DAYS_MS) && (now - lastChecked > FOURTEEN_DAYS_MS);
-        if (isExpired) {
-          deletedInboxIds.push(inbox.id);
-          const toDelete = remainingMessages.filter(m => String(m.inboxEmail || '').toLowerCase() === String(inbox.email || '').toLowerCase());
-          for (const m of toDelete) {
-            removedMessageIds.push(m.id);
-            content.purge(m.id);
-            prunedMessagesCount++;
-          }
-        } else {
-          activeInboxes.push(inbox);
-        }
-      }
-    }
 
     // 5. Hard Storage Ceiling Check (150 MB)
     let stats = content.getStorageStats();
@@ -986,32 +969,11 @@ class InboxDatabase {
   }
 
   getAppVersion() {
-    const data = this.readLocal();
-    const defaultVersion = {
-      latestVersionCode: 9,
-      latestVersionName: "1.3.5",
-      downloadUrl: "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.3.5/Batabitoo-Mail-Center-1.3.5.apk",
-      releaseNotes: "دعم كامل لإضافة حسابات Gmail حقيقية ومعاملتها كحسابات رسمية لعمليات أمازون والحظر ورموز التحقق 24/7.",
-      mandatory: false,
-      updatedAt: new Date().toISOString()
-    };
-    return data.appVersion || defaultVersion;
+    return mailDatabase.getAppVersion();
   }
 
   async updateAppVersion(versionData) {
-    const current = this.getAppVersion();
-    const updated = {
-      latestVersionCode: Number(versionData.latestVersionCode !== undefined ? versionData.latestVersionCode : current.latestVersionCode),
-      latestVersionName: String(versionData.latestVersionName || current.latestVersionName || "1.2.0"),
-      downloadUrl: String(versionData.downloadUrl || current.downloadUrl || ""),
-      releaseNotes: String(versionData.releaseNotes !== undefined ? versionData.releaseNotes : current.releaseNotes),
-      mandatory: Boolean(versionData.mandatory !== undefined ? versionData.mandatory : current.mandatory),
-      updatedAt: new Date().toISOString()
-    };
-
-    const data = this.readLocal();
-    data.appVersion = updated;
-    this.writeLocal(data);
+    const updated = mailDatabase.updateAppVersion(versionData);
 
     // Sync to Cloud Firestore (dual sync to both app_config/version and system/app_version)
     if (this.isCloudConnected && this.db) {
