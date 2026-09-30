@@ -10,9 +10,10 @@ gmail_connections.json
 keystore.properties
 *.jks
 *.keystore
+.tunnel_token
 
 # Local SQLite & Live User Data
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm
@@ -49,4 +50,9 @@ android/local.properties
 web-preview-*.png
 scripts/*.png
 scripts/*.json
+*.pdf
+ticket_*
+test_ticket*
+scratch_*
+
 

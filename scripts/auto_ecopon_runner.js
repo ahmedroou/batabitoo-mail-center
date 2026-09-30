@@ -13,8 +13,6 @@ const RealInboxService = require('../RealInboxService');
 
 const realService = new RealInboxService();
 const RESULTS_FILE = path.join(__dirname, '../results_ecopon_alborg_live.json');
-const BACKUP_DB_FILE = path.join(__dirname, '../inboxes_db.backup.json');
-const LOCAL_DB_FILE = path.join(__dirname, '../inboxes_db.json');
 
 const MALE_FIRST_NAMES = [
   'محمد', 'عبدالله', 'أحمد', 'خالد', 'سعد', 'فهد', 'سلمان', 'عبدالعزيز', 'سلطان', 'فيصل',
@@ -347,6 +345,7 @@ async function participateWithAccount(page, inbox) {
 }
 
 async function runAutoEcopon(limit = 100) {
+  await db.ready();
   console.log('================================================================');
   console.log('🏆 STARTING ECOPON AL BORG GOLD AUTOMATION ENGINE');
   console.log(`🎯 Target Submissions: ${limit}`);
@@ -359,24 +358,11 @@ async function runAutoEcopon(limit = 100) {
   // Gather eligible inboxes (filter strictly for active api.mail.tm)
   const inboxesToUse = [];
 
-  // 1. Existing backup inboxes with valid tokens (only api.mail.tm)
-  if (fs.existsSync(BACKUP_DB_FILE)) {
-    const b = JSON.parse(fs.readFileSync(BACKUP_DB_FILE, 'utf8'));
-    for (const ib of b.inboxes || []) {
-      if (ib.host === 'api.mail.tm' && ib.email.endsWith('@emalupe.com') && !completedEmails.has(ib.email.toLowerCase())) {
+  // Existing usable inboxes come exclusively from the active Firestore dataset.
+  for (const ib of db.getTempInboxes()) {
+    if (ib.host === 'api.mail.tm' && !completedEmails.has(ib.email.toLowerCase())) {
+      if (!inboxesToUse.some(x => x.email.toLowerCase() === ib.email.toLowerCase())) {
         inboxesToUse.push(ib);
-      }
-    }
-  }
-
-  // 2. Existing local inboxes
-  if (fs.existsSync(LOCAL_DB_FILE)) {
-    const l = JSON.parse(fs.readFileSync(LOCAL_DB_FILE, 'utf8'));
-    for (const ib of l.inboxes || []) {
-      if (ib.host === 'api.mail.tm' && !completedEmails.has(ib.email.toLowerCase())) {
-        if (!inboxesToUse.some(x => x.email.toLowerCase() === ib.email.toLowerCase())) {
-          inboxesToUse.push(ib);
-        }
       }
     }
   }

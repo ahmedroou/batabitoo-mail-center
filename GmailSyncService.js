@@ -3,52 +3,175 @@ const path = require('path');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const db = require('./InboxDatabase');
+const { mailDatabase } = require('./CloudDatabase');
 const content = require('./MailContent');
 const emailParser = require('./EmailParser');
+const { broadcast } = require('./eventBus');
 
-const CONNECTIONS_FILE = path.join(__dirname, 'gmail_connections.json');
-const OAUTH_CONFIG_FILE = path.join(__dirname, 'google_oauth_config.json');
+function canonicalGmail(email) {
+  const clean = String(email || '').trim().toLowerCase();
+  if (!clean.endsWith('@gmail.com')) return clean;
+  const [user] = clean.split('@');
+  return user.replace(/\./g, '') + '@gmail.com';
+}
+
+const DEFAULT_GOOGLE_CLIENT_ID = '13228089590-38ofl0b0j69oqqr1bmr9s6mg0hbdv56n.apps.googleusercontent.com';
 
 class GmailSyncService {
   constructor() {
     this.clients = new Map();
-    this.loadAccounts();
+    this.oauthSyncTimer = null;
+    this.oauthSyncRunning = false;
+    this.readyPromise = mailDatabase.ready().then(async () => {
+      await this.seedOAuthConfig();
+    }).catch(err => {
+      console.warn('⚠️ [GmailSync] mailDatabase ready error:', err.message);
+    });
+  }
+
+  async seedOAuthConfig() {
+    try {
+      const existing = mailDatabase.getSetting('google_oauth_config');
+      if (!existing) {
+        const configPath = path.join(__dirname, 'google_oauth_config.json');
+        if (fs.existsSync(configPath)) {
+          const raw = fs.readFileSync(configPath, 'utf8');
+          const parsed = JSON.parse(raw);
+          if (parsed && (parsed.clientId || parsed.clientSecret)) {
+            await mailDatabase.setSetting('google_oauth_config', JSON.stringify(parsed));
+            console.log('✅ [GmailSync] Seeded google_oauth_config into Firestore settings.');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [GmailSync] Could not seed google_oauth_config:', e.message);
+    }
   }
 
   loadAccounts() {
-    try {
-      if (fs.existsSync(CONNECTIONS_FILE)) {
-        return JSON.parse(fs.readFileSync(CONNECTIONS_FILE, 'utf8'));
-      }
-    } catch (e) {
-      console.error('⚠️ Error reading gmail_connections.json:', e.message);
-    }
-    return [];
+    const rows = mailDatabase.getOAuthAccounts();
+    return rows.map(r => ({
+      email: r.email,
+      authType: r.authType || r.auth_type || 'app_password',
+      personName: r.personName || r.person_name || r.email.split('@')[0],
+      refreshToken: r.refreshToken || r.refresh_token || null,
+      accessToken: r.accessToken || r.access_token || null,
+      expiryDate: r.expiryDate || r.expiry_date || null,
+      status: r.status || 'connected',
+      lastError: r.lastError || r.last_error || null,
+      lastSyncAt: r.lastSyncAt || r.last_sync_at || null,
+      connectedAt: r.connectedAt || r.connected_at || null,
+      syncedCount: Number(r.syncedCount ?? r.synced_count ?? 0),
+      appPassword: r.appPassword || r.app_password || null,
+      lastSeenUid: Number(r.lastSeenUid ?? r.last_seen_uid ?? 0) || null,
+      gmailHistoryId: r.gmailHistoryId || r.gmail_history_id || null
+    }));
   }
 
-  saveAccounts(accounts) {
-    try {
-      fs.writeFileSync(CONNECTIONS_FILE, JSON.stringify(accounts, null, 2), 'utf8');
-    } catch (e) {
-      console.error('⚠️ Error writing gmail_connections.json:', e.message);
+  findAccount(email) {
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const canonical = canonicalGmail(cleanEmail);
+    const accounts = this.loadAccounts();
+    let found = accounts.find(a => {
+      const aEmail = String(a.email || '').trim().toLowerCase();
+      return aEmail === cleanEmail || canonicalGmail(aEmail) === canonical;
+    });
+    if (!found) {
+      const direct = mailDatabase.getOAuthAccount(cleanEmail);
+      if (direct) {
+        found = {
+          email: direct.email,
+          authType: direct.authType || direct.auth_type || 'oauth2',
+          personName: direct.personName || direct.person_name || direct.email.split('@')[0],
+          refreshToken: direct.refreshToken || direct.refresh_token || null,
+          accessToken: direct.accessToken || direct.access_token || null,
+          expiryDate: direct.expiryDate || direct.expiry_date || null,
+          status: direct.status || 'connected',
+          lastError: direct.lastError || direct.last_error || null,
+          lastSyncAt: direct.lastSyncAt || direct.last_sync_at || null,
+          connectedAt: direct.connectedAt || direct.connected_at || null,
+          syncedCount: Number(direct.syncedCount ?? direct.synced_count ?? 0),
+          appPassword: direct.appPassword || direct.app_password || null,
+          lastSeenUid: Number(direct.lastSeenUid ?? direct.last_seen_uid ?? 0) || null,
+          gmailHistoryId: direct.gmailHistoryId || direct.gmail_history_id || null
+        };
+      }
+    }
+    if (!found) {
+      try {
+        const allInboxes = mailDatabase.getAllInboxes ? mailDatabase.getAllInboxes() : (db.getAllInboxes ? db.getAllInboxes() : []);
+        const inbox = allInboxes.find(i => {
+          const iEmail = String(i.email || '').trim().toLowerCase();
+          return iEmail === cleanEmail || canonicalGmail(iEmail) === canonical;
+        });
+        if (inbox && inbox.parentEmail) {
+          const parentClean = String(inbox.parentEmail).trim().toLowerCase();
+          const parentCanonical = canonicalGmail(parentClean);
+          found = accounts.find(a => {
+            const aEmail = String(a.email || '').trim().toLowerCase();
+            return aEmail === parentClean || canonicalGmail(aEmail) === parentCanonical;
+          });
+        }
+      } catch (_) {}
+    }
+
+    return found || null;
+  }
+
+  async saveAccounts(accounts) {
+    if (!Array.isArray(accounts)) return;
+    for (const acc of accounts) {
+      await mailDatabase.saveOAuthAccount(acc);
     }
   }
 
   getOAuthConfig() {
+    const raw = mailDatabase.getSetting('google_oauth_config');
+    if (raw) {
+      try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (parsed && (parsed.clientSecret || parsed.clientId)) {
+          return {
+            clientId: parsed.clientId || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID,
+            clientSecret: parsed.clientSecret || process.env.GOOGLE_CLIENT_SECRET || '',
+            redirectUri: parsed.redirectUri || process.env.GOOGLE_REDIRECT_URI || ''
+          };
+        }
+      } catch (_) {}
+    }
+
+    // Fallback to reading google_oauth_config.json from project root
     try {
-      if (fs.existsSync(OAUTH_CONFIG_FILE)) {
-        return JSON.parse(fs.readFileSync(OAUTH_CONFIG_FILE, 'utf8'));
+      const configPath = path.join(__dirname, 'google_oauth_config.json');
+      if (fs.existsSync(configPath)) {
+        const fileContent = fs.readFileSync(configPath, 'utf8');
+        const fileConfig = JSON.parse(fileContent);
+        if (fileConfig && (fileConfig.clientSecret || fileConfig.clientId)) {
+          if (!raw && mailDatabase.ready) {
+            mailDatabase.ready().then(() => {
+              if (!mailDatabase.getSetting('google_oauth_config')) {
+                mailDatabase.setSetting('google_oauth_config', JSON.stringify(fileConfig)).catch(() => {});
+              }
+            }).catch(() => {});
+          }
+          return {
+            clientId: fileConfig.clientId || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID,
+            clientSecret: fileConfig.clientSecret || process.env.GOOGLE_CLIENT_SECRET || '',
+            redirectUri: fileConfig.redirectUri || process.env.GOOGLE_REDIRECT_URI || ''
+          };
+        }
       }
-    } catch (e) {}
+    } catch (_) {}
+
     return {
-      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientId: process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
       redirectUri: process.env.GOOGLE_REDIRECT_URI || ''
     };
   }
 
-  saveOAuthConfig(config) {
-    fs.writeFileSync(OAUTH_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  async saveOAuthConfig(config) {
+    return mailDatabase.setSetting('google_oauth_config', JSON.stringify(config));
   }
 
   getAccounts() {
@@ -139,7 +262,7 @@ class GmailSyncService {
       } else {
         accounts.push(accData);
       }
-      this.saveAccounts(accounts);
+      await this.saveAccounts(accounts);
 
       this.startListener(cleanEmail, accData).catch(err => {
         console.error(`⚠️ [GmailSync] Error starting listener for ${cleanEmail}:`, err.message);
@@ -158,7 +281,7 @@ class GmailSyncService {
     }
   }
 
-  async connectOAuth({ email, refreshToken, accessToken, personName }) {
+  async connectOAuth({ email, refreshToken, accessToken, expiryDate, personName }) {
     const cleanEmail = String(email || '').trim().toLowerCase();
     const cleanName = String(personName || cleanEmail.split('@')[0]).trim();
 
@@ -187,6 +310,7 @@ class GmailSyncService {
       email: cleanEmail,
       refreshToken: refreshToken || (idx >= 0 ? accounts[idx].refreshToken : null),
       accessToken: accessToken || null,
+      expiryDate: expiryDate || null,
       personName: cleanName,
       authType: 'oauth2',
       connectedAt: new Date().toISOString(),
@@ -201,19 +325,29 @@ class GmailSyncService {
     } else {
       accounts.push(accData);
     }
-    this.saveAccounts(accounts);
+    await this.saveAccounts(accounts);
 
-    this.syncAccount(cleanEmail).catch(() => {});
+    // Do not tell the user that a mailbox is ready before its first Firestore
+    // sync has actually completed. A failed first sync keeps the renewable
+    // connection and returns a visible warning instead of failing silently.
+    let syncWarning = null;
+    let newCount = 0;
+    try {
+      const syncResult = await this.syncAccount(cleanEmail);
+      newCount = Number(syncResult?.newCount || 0);
+    } catch (error) {
+      syncWarning = error.message;
+      await mailDatabase.saveOAuthAccount({ ...accData, lastError: syncWarning, status: 'connected' });
+      console.error(`⚠️ [GmailSync] Initial sync failed for ${cleanEmail}:`, syncWarning);
+    }
 
-    return { success: true, email: cleanEmail, inbox: inboxRecord };
+    return { success: true, email: cleanEmail, inbox: inboxRecord, newCount, syncWarning };
   }
 
   async disconnect(email) {
     const cleanEmail = String(email || '').trim().toLowerCase();
     this.stopListener(cleanEmail);
-
-    const accounts = this.loadAccounts().filter(a => a.email !== cleanEmail);
-    this.saveAccounts(accounts);
+    await mailDatabase.deleteOAuthAccount(cleanEmail);
 
     return { success: true, email: cleanEmail };
   }
@@ -274,10 +408,9 @@ class GmailSyncService {
             client.on('exists', async (data) => {
               console.log(`📩 [GmailSync] New message arrival event in ${email}! Total messages: ${data.count}`);
               try {
-                await this.fetchNewMessages(client, email, lastUid, (newMaxUid) => {
+                await this.fetchNewMessages(client, email, lastUid, async (newMaxUid) => {
                   lastUid = newMaxUid;
-                  this.updateAccountField(email, 'lastSeenUid', lastUid);
-                  this.updateAccountField(email, 'lastSyncAt', new Date().toISOString());
+                  await this.updateAccountFields(email, { lastSeenUid: lastUid, lastSyncAt: new Date().toISOString() });
                 });
               } catch (e) {
                 console.error(`⚠️ [GmailSync] Fetch error on arrival:`, e.message);
@@ -324,7 +457,9 @@ class GmailSyncService {
 
       try {
         const parsed = await simpleParser(message.source);
-        const msgId = `gmail_${email.replace(/[^a-z0-9]/g, '_')}_${message.uid}_${Date.now()}`;
+        // Gmail UID is stable inside the mailbox. A deterministic ID makes a
+        // retry idempotent even if the checkpoint write was interrupted.
+        const msgId = `gmail_imap_${email.replace(/[^a-z0-9]/g, '_')}_${message.uid}`;
 
         // Look for Delivered-To header, or To header preserving dots
         let deliveredTo = '';
@@ -379,6 +514,8 @@ class GmailSyncService {
           domain: 'gmail.com',
           isRealGmail: true,
           isDottedGmailAlias: isDotted,
+          contentComplete: true,
+          bodyStored: true,
           gmailUid: message.uid,
           createdAt: rawPayload.createdAt
         };
@@ -411,7 +548,11 @@ class GmailSyncService {
     }
 
     if (messagesToSave.length > 0) {
-      await db.saveMessages(email, messagesToSave);
+      const insertedCount = await db.saveMessages(email, messagesToSave);
+      if (insertedCount > 0) {
+        broadcast('message:new', { inboxEmail: email, count: insertedCount });
+        broadcast('status:counts', db.getStatusCounts());
+      }
       for (const m of messagesToSave) {
         if (m.exactRecipient && m.exactRecipient !== email) {
           await db.saveMessages(m.exactRecipient, [m]).catch(() => {});
@@ -419,27 +560,77 @@ class GmailSyncService {
       }
       const accs = this.loadAccounts();
       const a = accs.find(x => x.email === email);
-      if (a) {
-        a.syncedCount = (a.syncedCount || 0) + messagesToSave.length;
-        this.saveAccounts(accs);
+      if (a && insertedCount > 0) {
+        a.syncedCount = (a.syncedCount || 0) + insertedCount;
+        await this.saveAccounts(accs);
       }
     }
 
-    if (onUidUpdate) onUidUpdate(maxSeen);
+    if (onUidUpdate) await onUidUpdate(maxSeen);
   }
 
-  async syncAccount(email) {
+  async syncAccount(email, options = {}) {
+    this.pendingSyncs ||= new Map();
+    const key = canonicalGmail(String(email || '').trim().toLowerCase());
+    const pending = this.pendingSyncs.get(key);
+    if (pending) {
+      if (!options.accessToken) return pending;
+      await pending.catch(() => {});
+    }
+    const run = this._syncAccount(email, options);
+    this.pendingSyncs.set(key, run);
+    try { return await run; }
+    finally { if (this.pendingSyncs.get(key) === run) this.pendingSyncs.delete(key); }
+  }
+
+  async _syncAccount(email, options = {}) {
     const cleanEmail = String(email || '').trim().toLowerCase();
-    const accounts = this.loadAccounts();
-    const account = accounts.find(a => a.email === cleanEmail);
-    if (!account) throw new Error('الحساب غير موجود');
+    let account = this.findAccount(cleanEmail);
+
+    if (options.accessToken) {
+      if (account) {
+        account.accessToken = options.accessToken;
+        account.status = 'connected';
+        account.lastError = null;
+        await this.updateAccountField(account.email, 'accessToken', options.accessToken);
+      } else {
+        account = {
+          email: cleanEmail,
+          accessToken: options.accessToken,
+          refreshToken: null,
+          personName: cleanEmail.split('@')[0],
+          authType: 'oauth2',
+          status: 'connected',
+          connectedAt: new Date().toISOString(),
+          lastSyncAt: new Date().toISOString(),
+          syncedCount: 0
+        };
+        const allAccs = this.loadAccounts();
+        allAccs.push(account);
+        await this.saveAccounts(allAccs);
+      }
+    }
+
+    if (!account) {
+      const allInboxes = db.getAllInboxes ? db.getAllInboxes() : [];
+      const canonical = canonicalGmail(cleanEmail);
+      const inboxExists = allInboxes.some(i => {
+        const iEmail = String(i.email || '').trim().toLowerCase();
+        return iEmail === cleanEmail || canonicalGmail(iEmail) === canonical;
+      });
+
+      if (inboxExists) {
+        throw new Error(`حساب Gmail (${cleanEmail}) غير متصل بمصادقة Google. يرجى الضغط على [ربط حساب Google] لربطه أولاً.`);
+      }
+      throw new Error(`صندوق البريد (${cleanEmail}) غير مسجل في النظام. أضف الصندوق أولاً.`);
+    }
 
     if (account.authType === 'app_password' && account.appPassword) {
       const client = new ImapFlow({
         host: 'imap.gmail.com',
         port: 993,
         secure: true,
-        auth: { user: cleanEmail, pass: account.appPassword },
+        auth: { user: account.email, pass: account.appPassword },
         logger: false
       });
 
@@ -448,9 +639,8 @@ class GmailSyncService {
         const lock = await client.getMailboxLock('INBOX');
         try {
           const lastUid = account.lastSeenUid || Math.max(1, (client.mailbox.uidNext || 10) - 5);
-          await this.fetchNewMessages(client, cleanEmail, lastUid, (newUid) => {
-            this.updateAccountField(cleanEmail, 'lastSeenUid', newUid);
-            this.updateAccountField(cleanEmail, 'lastSyncAt', new Date().toISOString());
+          await this.fetchNewMessages(client, account.email, lastUid, async (newUid) => {
+            await this.updateAccountFields(account.email, { lastSeenUid: newUid, lastSyncAt: new Date().toISOString() });
           });
         } finally {
           lock.release();
@@ -458,50 +648,120 @@ class GmailSyncService {
       } finally {
         await client.logout().catch(() => {});
       }
-    } else if (account.authType === 'oauth2' && account.refreshToken) {
-      await this.syncViaGmailApi(account);
+    } else if (account.authType === 'oauth2' || account.authType === 'oauth') {
+      const newCount = await this.syncViaGmailApi(account, options.accessToken || account.accessToken);
+      return { success: true, email: cleanEmail, newCount };
     }
 
-    return { success: true, email: cleanEmail };
+    return { success: true, email: cleanEmail, newCount: 0 };
   }
 
-  async syncViaGmailApi(account) {
+  async refreshAccountToken(accountOrEmail) {
+    const account = typeof accountOrEmail === 'string' ? this.findAccount(accountOrEmail) : accountOrEmail;
+    if (!account || !account.refreshToken) return null;
     const config = this.getOAuthConfig();
-    if (!config.clientId || !config.clientSecret) {
-      throw new Error('لم يتم إعداد Google OAuth Client ID و Secret');
+    const clientId = config.clientId || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID;
+    const clientSecret = config.clientSecret || process.env.GOOGLE_CLIENT_SECRET;
+    if (!clientSecret) {
+      console.warn(`⚠️ [GmailSync] Cannot refresh token for ${account.email}: missing OAuth clientSecret`);
+      return null;
     }
 
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        refresh_token: account.refreshToken,
-        grant_type: 'refresh_token'
-      })
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) {
-      throw new Error('فشل تجديد رمز الوصول من جوجل: ' + (tokenData.error_description || tokenData.error));
+    try {
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: account.refreshToken,
+          grant_type: 'refresh_token'
+        })
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (tokenData.access_token) {
+        account.accessToken = tokenData.access_token;
+        account.status = 'connected';
+        account.lastError = null;
+        const expiryDate = new Date(Date.now() + Number(tokenData.expires_in || 3600) * 1000).toISOString();
+        account.expiryDate = expiryDate;
+        await this.updateAccountFields(account.email, { accessToken: tokenData.access_token, expiryDate, status: 'connected', lastError: null });
+        return tokenData.access_token;
+      } else if (tokenData.error) {
+        const errMsg = tokenData.error_description || tokenData.error || 'Token refresh failed';
+        await this.updateAccountFields(account.email, {
+          lastError: errMsg,
+          status: tokenData.error === 'invalid_grant' ? 'auth_expired' : 'refresh_failed',
+        });
+      }
+    } catch (error) {
+      await this.updateAccountField(account.email, 'lastError', error.message);
+    }
+    return null;
+  }
+
+  async syncViaGmailApi(account, directAccessToken = null) {
+    let accessToken = directAccessToken || account.accessToken;
+    const expiresAt = Date.parse(account.expiryDate || 0);
+    const expiresSoon = Number.isFinite(expiresAt) && expiresAt <= Date.now() + 2 * 60 * 1000;
+    if (account.refreshToken && (!accessToken || expiresSoon)) {
+      accessToken = await this.refreshAccountToken(account);
     }
 
-    const accessToken = tokenData.access_token;
-    account.accessToken = accessToken;
-    this.updateAccountField(account.email, 'accessToken', accessToken);
+    if (!accessToken) {
+      const revoked = this.findAccount(account.email)?.status === 'auth_expired';
+      const needsRelink = revoked || !account.refreshToken;
+      await this.updateAccountField(account.email, 'status', needsRelink ? 'auth_expired' : 'refresh_failed');
+      throw new Error(needsRelink
+        ? `حساب Gmail (${account.email}) يحتاج إلى تسجيل الدخول. يرجى الضغط على [ربط حساب Google].`
+        : `تعذر تجديد الاتصال مؤقتًا لحساب ${account.email}. ستتم إعادة المحاولة تلقائيًا.`);
+    }
 
-    const listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=newer_than:2d', {
+    let listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=15&q=newer_than:7d', {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
+
+    if (listRes.status === 401 && account.refreshToken) {
+      console.log(`🔄 [GmailSync] Access token expired for ${account.email}, refreshing via refresh_token...`);
+      const newTok = await this.refreshAccountToken(account);
+      if (newTok) {
+        accessToken = newTok;
+        listRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=15&q=newer_than:7d', {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+      }
+    }
+
+    if (listRes.status === 401) {
+      // Preserve a definitive invalid_grant recorded by refreshAccountToken.
+      const currentAccount = this.findAccount(account.email);
+      const revoked = currentAccount?.status === 'auth_expired';
+      await this.updateAccountFields(account.email, {
+        status: revoked || !account.refreshToken ? 'auth_expired' : 'refresh_failed',
+        lastError: account.refreshToken ? (currentAccount?.lastError || 'Token refresh failed') : 'No renewable credential',
+      });
+      throw new Error(account.refreshToken
+        ? `تعذر تجديد تصريح Google لحساب ${account.email}. تحقق من إعدادات OAuth في الخادم ثم أعد الربط مرة واحدة.`
+        : `حساب Gmail (${account.email}) لم يحصل سابقاً على رمز تجديد دائم. أعد ربطه مرة واحدة عبر Google ليبقى متصلاً.`);
+    }
+
+    if (!listRes.ok) {
+      throw new Error(`تعذر الاتصال بخدمة Gmail (رمز ${listRes.status})`);
+    }
+
     const listData = await listRes.json();
-    const messages = listData.messages || [];
+    // Gmail returns the newest window on every poll. Avoid downloading and
+    // parsing messages already present in Firestore, and only announce records
+    // that were truly inserted during this run.
+    const existingIds = new Set(db.getAllMessages().map(message => String(message.id)));
+    const messages = (listData.messages || []).filter(item => !existingIds.has(`gmail_oauth_${item.id}`));
 
     const messagesToSave = [];
     for (const item of messages) {
       const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=raw`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      const msgData = await msgRes.json();
+      const msgData = await msgRes.json().catch(() => ({}));
       if (!msgData.raw) continue;
 
       const rawBuffer = Buffer.from(msgData.raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -557,22 +817,38 @@ class GmailSyncService {
         domain: 'gmail.com',
         isRealGmail: true,
         isDottedGmailAlias: isDotted,
+        contentComplete: true,
+        bodyStored: true,
         createdAt: rawPayload.createdAt
       });
     }
 
+    let insertedCount = 0;
     if (messagesToSave.length > 0) {
-      await db.saveMessages(account.email, messagesToSave);
-      this.updateAccountField(account.email, 'lastSyncAt', new Date().toISOString());
+      insertedCount = await db.saveMessages(account.email, messagesToSave);
+      if (insertedCount > 0) {
+        broadcast('message:new', { inboxEmail: account.email, count: insertedCount });
+        broadcast('status:counts', db.getStatusCounts());
+      }
     }
+    await this.updateAccountFields(account.email, { lastSyncAt: new Date().toISOString(), status: 'connected', lastError: null });
+    return insertedCount;
   }
 
-  updateAccountField(email, field, value) {
-    const accs = this.loadAccounts();
-    const a = accs.find(x => x.email === email);
-    if (a) {
-      a[field] = value;
-      this.saveAccounts(accs);
+  async updateAccountField(email, field, value) {
+    return this.updateAccountFields(email, { [field]: value });
+  }
+
+  async updateAccountFields(email, fields) {
+    const a = this.findAccount(email);
+    if (!a) return false;
+    Object.assign(a, fields);
+    try {
+      await mailDatabase.saveOAuthAccount(a);
+      return true;
+    } catch (error) {
+      console.error(`⚠️ [GmailSync] Could not persist account changes for ${email}:`, error.message);
+      return false;
     }
   }
 
@@ -586,8 +862,37 @@ class GmailSyncService {
         });
       }
     }
+
+    // OAuth accounts cannot use the browser as a durable token/message cache.
+    // Poll them on the server at a conservative one-minute cadence; App
+    // Password accounts remain truly real-time through IMAP IDLE above.
+    const syncOAuthAccounts = async () => {
+      if (this.oauthSyncRunning) return;
+      this.oauthSyncRunning = true;
+      try {
+        const oauthAccounts = this.loadAccounts().filter(account =>
+          account.authType === 'oauth2' &&
+          account.status !== 'auth_expired' &&
+          Boolean(account.refreshToken || account.accessToken)
+        );
+        for (const account of oauthAccounts) {
+          await this.syncAccount(account.email).catch(error => {
+            console.error(`⚠️ [GmailSync] OAuth poll failed for ${account.email}:`, error.message);
+          });
+        }
+      } finally {
+        this.oauthSyncRunning = false;
+      }
+    };
+    if (!this.oauthSyncTimer) {
+      const initialTimer = setTimeout(() => syncOAuthAccounts().catch(() => {}), 5000);
+      initialTimer.unref?.();
+      this.oauthSyncTimer = setInterval(() => syncOAuthAccounts().catch(() => {}), 60_000);
+      this.oauthSyncTimer.unref?.();
+    }
   }
 }
 
 const gmailSync = new GmailSyncService();
 module.exports = gmailSync;
+module.exports.canonicalGmail = canonicalGmail;

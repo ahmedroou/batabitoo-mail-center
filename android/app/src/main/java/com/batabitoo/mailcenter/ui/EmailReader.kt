@@ -50,7 +50,7 @@ import java.util.Locale
 private val AmazonOrange = Color(0xFFFF9900)
 
 @Composable
-fun EmailReader(
+private fun LegacyEmailReader(
     message: MailMessage,
     baseUrl: String,
     loading: Boolean,
@@ -208,7 +208,7 @@ fun EmailReader(
                         ) {
                             if (isAmazon) {
                                 Icon(
-                                    Icons.Rounded.ShoppingCart,
+                                    Icons.Rounded.AlternateEmail,
                                     contentDescription = null,
                                     tint = Color.White,
                                     modifier = Modifier.size(20.dp),

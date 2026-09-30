@@ -1,22 +1,25 @@
 package com.batabitoo.mailcenter.ui.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val Ink = Color(0xFF151929)
-val Canvas = Color(0xFFF4F6FB)
+val Ink = Color(0xFF15182B)
+val Canvas = Color(0xFFF6F7FC)
 val Surface = Color(0xFFFFFFFF)
-val SurfaceSoft = Color(0xFFF0F2F8)
-val Primary = Color(0xFF6558F5)
-val PrimaryLight = Color(0xFFEEF2FF)
-val Violet = Color(0xFF8A5CFF)
-val Cyan = Color(0xFF36C9DB)
+val SurfaceSoft = Color(0xFFF0F2FA)
+val Primary = Color(0xFF5B55E7)
+val PrimaryLight = Color(0xFFEFEEFF)
+val Violet = Color(0xFF8558EA)
+val Cyan = Color(0xFF22B8CF)
 val TempLight = Color(0xFFECFEFF)
 val Gold = Color(0xFFF2B84B)
 val OfficialGold = Color(0xFFD97706)
@@ -32,6 +35,9 @@ val MutedLight = Color(0xFF9CA3AF)
 val CardBorder = Color(0xFFE5E7EB)
 val CardBorderSubtle = Color(0xFFF3F4F6)
 val Danger = Color(0xFFEF4444)
+val NebulaNight = Color(0xFF151630)
+val NebulaBlue = Color(0xFF25235E)
+val NebulaMist = Color(0xFFE8E9FF)
 
 private val MailColors = lightColorScheme(
     primary = Primary,
@@ -45,6 +51,11 @@ private val MailColors = lightColorScheme(
     surfaceVariant = SurfaceSoft,
     onSurfaceVariant = Muted,
     error = Danger,
+    outline = CardBorder,
+    outlineVariant = CardBorderSubtle,
+    surfaceContainer = SurfaceSoft,
+    surfaceContainerLow = Color(0xFFFAFAFE),
+    surfaceContainerHigh = Color(0xFFE9EBF5),
 )
 
 private val MailTypography = Typography(
@@ -59,7 +70,20 @@ private val MailTypography = Typography(
     labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
 )
 
+private val MailShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(30.dp),
+)
+
 @Composable
 fun BatabitooTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = MailColors, typography = MailTypography, content = content)
+    MaterialTheme(
+        colorScheme = MailColors,
+        typography = MailTypography,
+        shapes = MailShapes,
+        content = content,
+    )
 }

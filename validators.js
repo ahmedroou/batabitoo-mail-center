@@ -26,7 +26,7 @@ function isValidSha256(hashStr) {
 }
 
 function validateLoginPayload(body) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { valid: false, error: 'بيانات الطلب غير صالحة (JSON مطلوب).' };
   }
   const pin = body.pin || body.password;
@@ -37,8 +37,12 @@ function validateLoginPayload(body) {
 }
 
 function validateAppVersionPayload(body) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { valid: false, error: 'بيانات التحديث غير صالحة.' };
+  }
+
+  if (typeof body.latestVersionCode === 'boolean') {
+    return { valid: false, error: 'رقم الإصدار (latestVersionCode) يجب أن يكون رقماً صحيحاً موجباً.' };
   }
 
   const code = Number(body.latestVersionCode);
@@ -72,7 +76,7 @@ function validateAppVersionPayload(body) {
 }
 
 function validateOfficialCreatePayload(body) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { valid: false, error: 'بيانات الحساب غير صالحة.' };
   }
 
@@ -85,24 +89,32 @@ function validateOfficialCreatePayload(body) {
     return { valid: false, error: 'الحساب الرسمي يجب أن ينتهي بنطاق @batabitoo.com أو @gmail.com.' };
   }
 
+  const trimmedLabel = body.label ? String(body.label).trim().slice(0, 100) : '';
+  const trimmedPersonName = body.personName ? String(body.personName).trim().slice(0, 100) : '';
+  const defaultLabel = email.split('@')[0];
+
   return {
     valid: true,
     data: {
       email,
       password: body.password ? String(body.password).slice(0, 256) : null,
-      label: body.label ? String(body.label).slice(0, 100) : email.split('@')[0],
-      personName: body.personName ? String(body.personName).slice(0, 100) : email.split('@')[0]
+      label: trimmedLabel || defaultLabel,
+      personName: trimmedPersonName || defaultLabel
     }
   };
 }
 
 function validateBanStatusPayload(body) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { valid: false, error: 'بيانات الحظر غير صالحة.' };
   }
 
-  const target = body.inboxId || body.id || body.email;
-  if (!isNonEmptyString(target, 255)) {
+  const target = (typeof body.inboxId === 'string' && body.inboxId.trim())
+    || (typeof body.id === 'string' && body.id.trim())
+    || (typeof body.email === 'string' && body.email.trim())
+    || null;
+
+  if (!target || target.length > 255) {
     return { valid: false, error: 'معرف الصندوق أو البريد مطلوب.' };
   }
 
@@ -115,7 +127,9 @@ function validateBanStatusPayload(body) {
   return {
     valid: true,
     data: {
-      inboxId: String(body.inboxId).trim(),
+      inboxId: target,
+      id: target,
+      target,
       status,
       reason: String(body.reason || body.banReason || '').slice(0, 500)
     }
@@ -123,7 +137,7 @@ function validateBanStatusPayload(body) {
 }
 
 function validateNiveaLogPayload(body) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { valid: false, error: 'بيانات التسجيل غير صالحة.' };
   }
 
@@ -135,6 +149,11 @@ function validateNiveaLogPayload(body) {
     return { valid: false, error: 'رقم الجوال مطلوب.' };
   }
 
+  let index = null;
+  if (body.index !== undefined && body.index !== null && !isNaN(Number(body.index))) {
+    index = Number(body.index);
+  }
+
   return {
     valid: true,
     data: {
@@ -143,7 +162,7 @@ function validateNiveaLogPayload(body) {
       realEmail: String(body.realEmail || '').trim().slice(0, 255),
       city: String(body.city || '').trim().slice(0, 100),
       receiptNumber: String(body.receiptNumber || '').trim().slice(0, 100),
-      index: body.index ? Number(body.index) : null
+      index
     }
   };
 }

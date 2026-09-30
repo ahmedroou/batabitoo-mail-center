@@ -1,214 +1,309 @@
-/**
- * migrate_full_manifest_to_cloud.cjs
- * Full migration + Chunked Manifest builder for Firestore.
- * Run once after Firestore quota resets.
- *
- * Structure written:
- *   system/manifest_meta
- *   system/manifest_official_0  (≤100 official inboxes, newest first)
- *   system/manifest_temp_0 ... manifest_temp_9  (≤100 temp inboxes each)
- *   system/manifest_messages_official_0
- *   system/manifest_messages_temp_0
- *   + all 1006 inboxes in inboxes/ collection (slim)
- *   + all 27 messages in messages/ collection (slim)
- */
+#!/usr/bin/env node
 "use strict";
 
-const fs   = require("fs");
+/**
+ * Safe Firestore v2 migration.
+ *
+ * Default: read-only dry run that merges the local export with current cloud
+ * documents and prints the exact staged dataset plan.
+ *
+ *   node scripts/migrate_full_manifest_to_cloud.cjs
+ *   node scripts/migrate_full_manifest_to_cloud.cjs --write
+ *   node scripts/migrate_full_manifest_to_cloud.cjs --write --activate
+ *
+ * --write stages and verifies mailDatasets/v2 without deleting legacy data.
+ * --activate atomically switches system/data_pointer only after verification.
+ */
+
+const fs = require("fs");
 const path = require("path");
+const {
+  applicationDefault,
+  cert,
+  getApps,
+  initializeApp,
+} = require("firebase-admin/app");
+const { FieldValue, getFirestore } = require("firebase-admin/firestore");
+const {
+  TARGET_CHUNK_BYTES,
+  buildChunkDocuments,
+  buildDataset,
+  mergeSources,
+  sha256,
+} = require("../lib/cloudDataModel");
 
 const ROOT = path.join(__dirname, "..");
-const SA   = path.join(ROOT, "serviceAccountKey.json");
-const DB   = path.join(ROOT, "inboxes_db.json");
+const LOCAL_EXPORT = path.join(ROOT, "inboxes_db.json");
+const SERVICE_ACCOUNT = path.join(ROOT, "serviceAccountKey.json");
+const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "batabitoo-mail-2026";
+const DATASET_ID = "v2";
+const BATCH_LIMIT = 400;
+const args = new Set(process.argv.slice(2));
+const shouldWrite = args.has("--write");
+const shouldActivate = args.has("--activate");
+const LEGACY_SQLITE = path.join(ROOT, "data", "mail_center.db");
+const LEGACY_OAUTH_CONFIG = path.join(ROOT, "google_oauth_config.json");
 
-if (!fs.existsSync(SA)) {
-  console.error("❌ serviceAccountKey.json not found in project root.");
-  process.exit(1);
+if (shouldActivate && !shouldWrite) {
+  throw new Error("--activate requires --write so the dataset is verified before cutover.");
 }
-if (!fs.existsSync(DB)) {
-  console.error("❌ inboxes_db.json not found.");
-  process.exit(1);
+if (!fs.existsSync(LOCAL_EXPORT)) {
+  throw new Error(`Migration source is missing: ${LOCAL_EXPORT}`);
 }
 
-const { initializeApp, getApps, cert: adminCert } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
-
-const serviceAccount = require(SA);
+function firebaseCredential() {
+  if (fs.existsSync(SERVICE_ACCOUNT)) {
+    return cert(JSON.parse(fs.readFileSync(SERVICE_ACCOUNT, "utf8")));
+  }
+  return applicationDefault();
+}
 
 if (!getApps().length) {
-  initializeApp({ credential: adminCert(serviceAccount), projectId: "batabitoo-mail-2026" });
+  initializeApp({ credential: firebaseCredential(), projectId: PROJECT_ID });
 }
-const db = getFirestore();
+const firestore = getFirestore();
 
-
-const CHUNK_SIZE  = 100;
-const BATCH_LIMIT = 400;
-
-const EXCLUDED = new Set(["raw","rawBase64","content","contentBase64","originalRaw","html","attachments"]);
-
-function sanitize(obj) {
-  if (!obj || typeof obj !== "object") return obj == null ? null : obj;
-  const out = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (EXCLUDED.has(k)) continue;
-    if (v === undefined) { out[k] = null; continue; }
-    if (typeof v === "string") { out[k] = v.length > 20000 ? v.slice(0, 20000) : v; continue; }
-    if (Array.isArray(v)) { out[k] = v.slice(0, 500).map(i => typeof i === "object" ? sanitize(i) : i); continue; }
-    if (v && typeof v === "object" && !(v instanceof Date)) { out[k] = sanitize(v); continue; }
-    out[k] = v;
+function plainFirestoreValue(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value?.toDate === "function") return value.toDate().toISOString();
+  if (Buffer.isBuffer(value)) return value.toString("base64");
+  if (Array.isArray(value)) return value.map(plainFirestoreValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, plainFirestoreValue(child)]));
   }
-  return out;
+  return value;
 }
 
-function slimInbox(i) {
+async function readCollection(name) {
+  const snapshot = await firestore.collection(name).get();
+  return snapshot.docs.map(doc => plainFirestoreValue({ id: doc.id, ...doc.data() }));
+}
+
+function migrationIdFor(localData, cloudInboxes, cloudMessages) {
+  return `migration_${sha256({ localData, cloudInboxes, cloudMessages }).slice(0, 16)}`;
+}
+
+function readLegacyAuxiliary(dataset) {
+  const auxiliary = {
+    oauthAccounts: [],
+    niveaLogs: [],
+    aiFeedback: [],
+    ignoredPatterns: [],
+    settings: {},
+    activeInboxId: null,
+    appVersion: JSON.parse(fs.readFileSync(path.join(ROOT, "public", "version.json"), "utf8")),
+  };
+  if (fs.existsSync(LEGACY_OAUTH_CONFIG)) {
+    auxiliary.settings.google_oauth_config = fs.readFileSync(LEGACY_OAUTH_CONFIG, "utf8");
+  }
+  if (!fs.existsSync(LEGACY_SQLITE)) return auxiliary;
+
+  const { DatabaseSync } = require("node:sqlite");
+  const sqlite = new DatabaseSync(LEGACY_SQLITE, { readOnly: true });
+  const rows = table => {
+    try { return sqlite.prepare(`SELECT * FROM ${table}`).all().map(item => ({ ...item })); }
+    catch (_) { return []; }
+  };
+  auxiliary.oauthAccounts = rows("oauth_accounts").filter(item => !String(item.email || "").startsWith("oauth_test_"));
+  auxiliary.niveaLogs = rows("nivea_logs");
+  auxiliary.aiFeedback = rows("ai_feedback").filter(item => !String(item.subject || "").includes("Offer 50% Off"));
+  auxiliary.ignoredPatterns = rows("ignored_patterns")
+    .map(item => item.pattern)
+    .filter(pattern => pattern && !pattern.startsWith("unwanted-domain-") && pattern !== "offer 50% off");
+  const settings = rows("settings");
+  for (const item of settings) {
+    if (item.key !== "activeInboxId") auxiliary.settings[item.key] = item.value;
+  }
+  const activeId = settings.find(item => item.key === "activeInboxId")?.value;
+  if (activeId && dataset.inboxChunks.some(chunk => chunk.data.items.some(item => item.id === activeId))) auxiliary.activeInboxId = activeId;
+  sqlite.close();
+  return auxiliary;
+}
+
+function buildAuxiliaryDataset(auxiliary, createdAt) {
+  const niveaItems = auxiliary.niveaLogs.map(item => ({
+    ...item,
+    id: String(item.id || `nivea_${sha256(item).slice(0, 20)}`),
+    registeredAt: item.registeredAt || item.registered_at || createdAt,
+    createdAt: item.registeredAt || item.registered_at || createdAt,
+  }));
+  const feedbackItems = auxiliary.aiFeedback.map(item => ({
+    ...item,
+    id: String(item.id || `feedback_${sha256(item).slice(0, 20)}`),
+    createdAt: item.createdAt || item.created_at || createdAt,
+  }));
+  const niveaChunks = buildChunkDocuments("nivea", niveaItems, { maxItems: 100, maxBytes: TARGET_CHUNK_BYTES, kind: "nivea" })
+    .map(doc => ({ ...doc, data: { ...doc.data, entity: "nivea" } }));
+  const feedbackChunks = buildChunkDocuments("aiFeedback", feedbackItems, { maxItems: 100, maxBytes: TARGET_CHUNK_BYTES, kind: "aiFeedback" })
+    .map(doc => ({ ...doc, data: { ...doc.data, entity: "aiFeedback" } }));
   return {
-    id:                 i.id || "",
-    email:              i.email || "",
-    domain:             i.domain || "",
-    label:              i.label || i.personName || (i.email||"").split("@")[0] || "",
-    personName:         i.personName || i.label || (i.email||"").split("@")[0] || "",
-    isOfficial:         i.isOfficial || false,
-    type:               i.type || (i.isOfficial ? "official" : "temp"),
-    isAmazon:           i.isAmazon || false,
-    isBanned:           i.isBanned || false,
-    banStatus:          i.banStatus || "none",
-    banReason:          i.banReason || "",
-    messageCount:       i.messageCount || 0,
-    createdAt:          i.createdAt || new Date().toISOString(),
-    isRealGmail:        i.isRealGmail || false,
-    isDottedGmailAlias: i.isDottedGmailAlias || false,
+    niveaChunks,
+    feedbackChunks,
+    chunkMap: {
+      nivea: niveaChunks.map(doc => doc.id).sort().reverse(),
+      aiFeedback: feedbackChunks.map(doc => doc.id).sort().reverse(),
+    },
   };
 }
 
-function slimMsg(m) {
-  return {
-    id:               m.id || "",
-    inboxEmail:       m.inboxEmail || m.to || "",
-    from:             m.from || "",
-    subject:          m.subject || "",
-    intro:            m.intro || "",
-    otp:              m.otp || null,
-    isAmazon:         m.isAmazon || false,
-    isBanned:         m.isBanned || false,
-    isWinning:        m.isWinning || false,
-    isOfficialDomain: m.isOfficialDomain || false,
-    createdAt:        m.createdAt || new Date().toISOString(),
+function allWrites(dataset, auxiliary) {
+  const root = firestore.collection("mailDatasets").doc(DATASET_ID);
+  const writes = [{ ref: root, data: dataset.meta }];
+  const addCollection = (name, docs) => {
+    for (const doc of docs) writes.push({ ref: root.collection(name).doc(doc.id), data: doc.data });
   };
+  addCollection("inboxChunks", dataset.inboxChunks);
+  addCollection("messageChunks", dataset.messageChunks);
+  addCollection("categoryChunks", dataset.categoryChunks);
+  addCollection("locatorShards", dataset.locatorDocs);
+  for (const [aliasId, canonicalId] of Object.entries(dataset.aliases)) {
+    writes.push({
+      ref: root.collection("aliases").doc(sha256(aliasId).slice(0, 32)),
+      data: { aliasId, canonicalId },
+    });
+  }
+  dataset.quarantine.forEach((entry, index) => {
+    const identity = `${entry.entity}:${entry.record?.id || "unknown"}:${index}`;
+    writes.push({
+      ref: root.collection("quarantine").doc(sha256(identity).slice(0, 32)),
+      data: { ...entry, quarantinedAt: dataset.createdAt, expiresAfterDays: 14 },
+    });
+  });
+  const auxiliaryDataset = buildAuxiliaryDataset(auxiliary, dataset.createdAt);
+  writes.push({
+    ref: firestore.collection("mailRuntime").doc("bootstrap"),
+    data: {
+      activeInboxId: auxiliary.activeInboxId,
+      values: auxiliary.settings,
+      ignoredPatterns: auxiliary.ignoredPatterns,
+      appVersion: auxiliary.appVersion,
+      oauthAccounts: auxiliary.oauthAccounts,
+      auxChunkMap: auxiliaryDataset.chunkMap,
+      auxCounts: { nivea: auxiliary.niveaLogs.length, aiFeedback: auxiliary.aiFeedback.length },
+      revision: 1,
+      migratedAt: dataset.createdAt,
+      updatedAt: dataset.createdAt,
+    },
+  });
+  for (const doc of [...auxiliaryDataset.niveaChunks, ...auxiliaryDataset.feedbackChunks]) {
+    writes.push({ ref: firestore.collection("mailAuxChunks").doc(doc.id), data: doc.data });
+  }
+  return writes;
 }
 
-function isOfficialInbox(i) {
-  const email = String(i.email || "").toLowerCase();
-  return i.isOfficial === true || i.type === "official" || email.endsWith("@batabitoo.com") || email.endsWith("@gmail.com");
-}
-function isOfficialMsg(m) {
-  const email = String(m.inboxEmail || m.to || "").toLowerCase();
-  return m.isOfficialDomain === true || email.endsWith("@batabitoo.com") || email.endsWith("@gmail.com");
-}
-
-function chunkArray(arr) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += CHUNK_SIZE) chunks.push(arr.slice(i, i + CHUNK_SIZE));
-  return chunks.length ? chunks : [[]];
-}
-
-async function writeBatches(items, handler) {
-  let done = 0;
-  for (let i = 0; i < items.length; i += BATCH_LIMIT) {
-    const slice = items.slice(i, i + BATCH_LIMIT);
-    const batch = db.batch();
-    for (const item of slice) handler(batch, item);
+async function commitWrites(writes) {
+  let completed = 0;
+  for (let offset = 0; offset < writes.length; offset += BATCH_LIMIT) {
+    const batch = firestore.batch();
+    for (const write of writes.slice(offset, offset + BATCH_LIMIT)) batch.set(write.ref, write.data);
     await batch.commit();
-    done += slice.length;
-    process.stdout.write(`   ⏳ ${done}/${items.length} written...\r`);
+    completed = Math.min(offset + BATCH_LIMIT, writes.length);
+    console.log(`  wrote ${completed}/${writes.length} documents`);
   }
-  console.log(`   ✅ ${done} documents committed.              `);
+}
+
+async function verifyDataset(dataset, auxiliary) {
+  const root = firestore.collection("mailDatasets").doc(DATASET_ID);
+  const rootSnapshot = await root.get();
+  if (!rootSnapshot.exists) throw new Error("Staged dataset metadata was not found after write.");
+  const remoteMeta = plainFirestoreValue(rootSnapshot.data());
+  if (remoteMeta.checksum !== dataset.checksum) throw new Error("Dataset checksum mismatch after write.");
+
+  const [inboxChunks, messageChunks, categoryChunks, locators, bootstrap] = await Promise.all([
+    root.collection("inboxChunks").get(),
+    root.collection("messageChunks").get(),
+    root.collection("categoryChunks").get(),
+    root.collection("locatorShards").get(),
+    firestore.collection("mailRuntime").doc("bootstrap").get(),
+  ]);
+  const inboxCount = inboxChunks.docs.reduce((sum, doc) => sum + Number(doc.data().itemCount || 0), 0);
+  const messageCount = messageChunks.docs.reduce((sum, doc) => sum + Number(doc.data().itemCount || 0), 0);
+  if (inboxCount !== dataset.counts.totalInboxes) throw new Error(`Inbox verification failed: ${inboxCount} != ${dataset.counts.totalInboxes}`);
+  if (messageCount !== dataset.counts.totalMessages) throw new Error(`Message verification failed: ${messageCount} != ${dataset.counts.totalMessages}`);
+  if (locators.size !== 32) throw new Error(`Locator verification failed: expected 32, found ${locators.size}`);
+  if (!bootstrap.exists) throw new Error("Auxiliary bootstrap verification failed: document missing.");
+  const bootstrapData = bootstrap.data();
+  if (Number(bootstrapData.auxCounts?.nivea || 0) !== auxiliary.niveaLogs.length) throw new Error("Nivea auxiliary count mismatch.");
+  if (Number(bootstrapData.auxCounts?.aiFeedback || 0) !== auxiliary.aiFeedback.length) throw new Error("AI feedback auxiliary count mismatch.");
+
+  return {
+    inboxChunks: inboxChunks.size,
+    messageChunks: messageChunks.size,
+    categoryChunks: categoryChunks.size,
+    locatorShards: locators.size,
+    auxiliaryBootstrapReads: 1,
+    auxiliaryChunks: [...(bootstrapData.auxChunkMap?.nivea || []), ...(bootstrapData.auxChunkMap?.aiFeedback || [])].length,
+  };
+}
+
+async function activate(dataset) {
+  const datasetRef = firestore.collection("mailDatasets").doc(DATASET_ID);
+  const pointerRef = firestore.collection("system").doc("data_pointer");
+  await firestore.runTransaction(async transaction => {
+    const snapshot = await transaction.get(datasetRef);
+    if (!snapshot.exists || snapshot.data().checksum !== dataset.checksum) {
+      throw new Error("Refusing activation because the staged dataset no longer matches verification.");
+    }
+    transaction.update(datasetRef, { status: "active", activatedAt: FieldValue.serverTimestamp() });
+    transaction.set(pointerRef, {
+      activeDatasetPath: `mailDatasets/${DATASET_ID}`,
+      activeVersion: DATASET_ID,
+      migrationId: dataset.migrationId,
+      checksum: dataset.checksum,
+      activatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+}
+
+function printPlan(dataset, merged, cloudCounts, auxiliary) {
+  const sizes = [...dataset.inboxChunks, ...dataset.messageChunks, ...dataset.categoryChunks]
+    .map(doc => doc.data.encodedBytes);
+  console.log("\nBatabitoo Firestore v2 migration plan");
+  console.log("=====================================");
+  console.log(`Mode: ${shouldWrite ? (shouldActivate ? "WRITE + ACTIVATE" : "WRITE/STAGE") : "DRY RUN (read only)"}`);
+  console.log(`Cloud inputs: ${cloudCounts.inboxes} inboxes, ${cloudCounts.messages} messages`);
+  console.log(`Final inboxes: ${dataset.counts.totalInboxes} (${dataset.counts.official} official, ${dataset.counts.temp} temp)`);
+  console.log(`Final messages: ${dataset.counts.totalMessages} (${dataset.counts.officialMessages} official, ${dataset.counts.tempMessages} temp)`);
+  console.log(`Categories: ${dataset.counts.amazon} Amazon, ${dataset.counts.banned} banned, ${dataset.counts.suspected} suspected`);
+  console.log(`Chunks: ${dataset.inboxChunks.length} inbox, ${dataset.messageChunks.length} message, ${dataset.categoryChunks.length} category`);
+  console.log(`Largest chunk: ${Math.max(0, ...sizes).toLocaleString()} bytes (target ${TARGET_CHUNK_BYTES.toLocaleString()})`);
+  console.log(`Aliases: ${Object.keys(merged.aliases).length}; quarantined: ${merged.quarantine.length}`);
+  console.log(`Auxiliary: ${auxiliary.oauthAccounts.length} OAuth accounts, ${auxiliary.niveaLogs.length} Nivea logs, ${auxiliary.aiFeedback.length} AI feedback records`);
+  console.log(`Checksum: ${dataset.checksum}`);
 }
 
 async function main() {
-  console.log("\n🚀 Batabitoo — Full Migration + Chunked Manifest");
-  console.log("══════════════════════════════════════════════════\n");
+  const localData = JSON.parse(fs.readFileSync(LOCAL_EXPORT, "utf8"));
+  const [cloudInboxes, cloudMessages] = await Promise.all([
+    readCollection("inboxes"),
+    readCollection("messages"),
+  ]);
+  const merged = mergeSources(localData, cloudInboxes, cloudMessages);
+  const migrationId = migrationIdFor(localData, cloudInboxes, cloudMessages);
+  const dataset = buildDataset(merged, { migrationId });
+  const auxiliary = readLegacyAuxiliary(dataset);
+  printPlan(dataset, merged, { inboxes: cloudInboxes.length, messages: cloudMessages.length }, auxiliary);
 
-  const localData = JSON.parse(fs.readFileSync(DB, "utf8"));
-  const allInboxes  = (localData.inboxes  || []).filter(i => i.id && i.email);
-  const allMessages = (localData.messages || []).filter(m => m.id);
-  console.log(`📦 Local DB: ${allInboxes.length} inboxes, ${allMessages.length} messages\n`);
-
-  // ── 1: Individual inboxes ───────────────────────────────────────────────
-  console.log("📁 Step 1: Writing inboxes/ collection...");
-  await writeBatches(allInboxes, (batch, inbox) => {
-    batch.set(db.collection("inboxes").doc(inbox.id), sanitize({ ...inbox, updatedAt: new Date().toISOString() }), { merge: true });
-  });
-
-  // ── 2: Individual messages ──────────────────────────────────────────────
-  console.log("\n✉️  Step 2: Writing messages/ collection...");
-  await writeBatches(allMessages, (batch, msg) => {
-    batch.set(db.collection("messages").doc(msg.id), sanitize({ ...msg, updatedAt: new Date().toISOString() }), { merge: true });
-  });
-
-  // ── 3: Build Chunked Manifest ───────────────────────────────────────────
-  console.log("\n🗂️  Step 3: Building Chunked Manifest (system/)...");
-  const now = new Date().toISOString();
-
-  const officialInboxes = allInboxes.filter(isOfficialInbox).sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0)).map(slimInbox);
-  const tempInboxes     = allInboxes.filter(i => !isOfficialInbox(i)).sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0)).map(slimInbox);
-  const officialMsgs    = allMessages.filter(isOfficialMsg).sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0)).map(slimMsg);
-  const tempMsgs        = allMessages.filter(m => !isOfficialMsg(m)).sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0)).map(slimMsg);
-
-  const officialChunks = chunkArray(officialInboxes);
-  const tempChunks     = chunkArray(tempInboxes);
-  const msgOffChunks   = chunkArray(officialMsgs);
-  const msgTempChunks  = chunkArray(tempMsgs);
-
-  console.log(`   📊 official: ${officialInboxes.length} in ${officialChunks.length} chunk(s)`);
-  console.log(`   📊 temp:     ${tempInboxes.length} in ${tempChunks.length} chunk(s)`);
-  console.log(`   📊 messages_official: ${officialMsgs.length} in ${msgOffChunks.length} chunk(s)`);
-  console.log(`   📊 messages_temp:     ${tempMsgs.length} in ${msgTempChunks.length} chunk(s)`);
-
-  const sysCol = db.collection("system");
-  const allOps = [];
-
-  allOps.push({ ref: sysCol.doc("manifest_meta"), data: sanitize({
-    official:          { chunks: officialChunks.length, total: officialInboxes.length },
-    temp:              { chunks: tempChunks.length,      total: tempInboxes.length },
-    messages_official: { chunks: msgOffChunks.length,   total: officialMsgs.length },
-    messages_temp:     { chunks: msgTempChunks.length,  total: tempMsgs.length },
-    totalInboxes:      allInboxes.length,
-    totalMessages:     allMessages.length,
-    updatedAt: now,
-  }) });
-
-  officialChunks.forEach((chunk, idx) =>
-    allOps.push({ ref: sysCol.doc(`manifest_official_${idx}`), data: sanitize({ chunk: idx, type: "official", inboxes: chunk, updatedAt: now }) }));
-  tempChunks.forEach((chunk, idx) =>
-    allOps.push({ ref: sysCol.doc(`manifest_temp_${idx}`), data: sanitize({ chunk: idx, type: "temp", inboxes: chunk, updatedAt: now }) }));
-  msgOffChunks.forEach((chunk, idx) =>
-    allOps.push({ ref: sysCol.doc(`manifest_messages_official_${idx}`), data: sanitize({ chunk: idx, type: "official", messages: chunk, updatedAt: now }) }));
-  msgTempChunks.forEach((chunk, idx) =>
-    allOps.push({ ref: sysCol.doc(`manifest_messages_temp_${idx}`), data: sanitize({ chunk: idx, type: "temp", messages: chunk, updatedAt: now }) }));
-
-  await writeBatches(allOps, (batch, op) => { batch.set(op.ref, op.data, { merge: true }); });
-
-  // ── 4: Verify ───────────────────────────────────────────────────────────
-  console.log("\n🔍 Step 4: Verifying manifest_meta...");
-  const metaSnap = await sysCol.doc("manifest_meta").get();
-  if (metaSnap.exists) {
-    const meta = metaSnap.data();
-    console.log("   ✅ manifest_meta OK:");
-    console.log(`      Official: ${meta.official?.total} in ${meta.official?.chunks} chunk(s)`);
-    console.log(`      Temp:     ${meta.temp?.total} in ${meta.temp?.chunks} chunk(s)`);
-    console.log(`      Total inboxes: ${meta.totalInboxes} | Total messages: ${meta.totalMessages}`);
-  } else {
-    console.warn("   ⚠️ manifest_meta not found after write!");
+  if (!shouldWrite) {
+    console.log("\nNo writes performed. Add --write to stage this verified plan.");
+    return;
   }
 
-  console.log("\n══════════════════════════════════════════════════");
-  console.log(`🎉 MIGRATION COMPLETE! ${allInboxes.length} inboxes + ${allMessages.length} messages + ${allOps.length} manifest docs`);
-  console.log("══════════════════════════════════════════════════\n");
-  process.exit(0);
+  const writes = allWrites(dataset, auxiliary);
+  console.log(`\nStaging ${writes.length} documents under mailDatasets/${DATASET_ID}...`);
+  await commitWrites(writes);
+  const verification = await verifyDataset(dataset, auxiliary);
+  console.log("Verified staged dataset:", verification);
+
+  if (shouldActivate) {
+    await activate(dataset);
+    console.log("Activated system/data_pointer -> mailDatasets/v2.");
+  } else {
+    console.log("Dataset remains staged. Re-run with --write --activate after the cloud runtime is deployed.");
+  }
 }
 
-main().catch(err => {
-  console.error("\n❌ Migration failed:", err.message);
-  process.exit(1);
+main().catch(error => {
+  console.error("Migration failed:", error.stack || error.message);
+  process.exitCode = 1;
 });
-

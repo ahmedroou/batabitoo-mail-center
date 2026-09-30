@@ -4,12 +4,14 @@ const db = require('./InboxDatabase');
 const RealInboxService = require('./RealInboxService');
 const emailParser = require('./EmailParser');
 const content = require('./MailContent');
+const { broadcast } = require('./eventBus');
 
 class TempSyncService {
   constructor() {
     this.service = new RealInboxService();
     this.isAutoSyncing = false;
     this.syncIntervalTimer = null;
+    this.initialTimer = null;
     this.lastSyncAt = null;
     this.lastSyncStats = { totalScanned: 0, newMessages: 0, winningFound: 0 };
     this.isSyncAllRunning = false;
@@ -120,6 +122,8 @@ class TempSyncService {
 
           await db.saveMessages(inbox.email, [record]);
           newCount++;
+          broadcast('message:new', { inboxEmail: inbox.email, message: content.summary(record) });
+          broadcast('status:counts', db.getStatusCounts());
 
           console.log(`📥 [TempSync] Fetched full message for ${inbox.email} | Subj: "${subject}" | OTP: ${extractedOtp || 'N/A'}${winAnalysis.isWinning ? ' | 🏆 WINNING DETECTED!' : ''}`);
         }
@@ -165,25 +169,42 @@ class TempSyncService {
     try {
       const allInboxes = db.getTempInboxes();
       // Get competition registered emails to prioritize them first
-      const niveaLogs = db.getNiveaLogs() || [];
-      const contestEmails = new Set(niveaLogs.map(l => String(l.email || '').toLowerCase().trim()));
+      const niveaLogsResult = db.getNiveaLogs() || [];
+      const contestList = Array.isArray(niveaLogsResult) ? niveaLogsResult : (niveaLogsResult.submissions || []);
+      const contestEmails = new Set(contestList.map(l => String(l.email || l.realEmail || '').toLowerCase().trim()));
 
-      // Sort: Contest registered first, then inboxes with messages, then others
+      // Always keep the highest-value inboxes in the cycle, then rotate through
+      // the remainder so the same first 300 are not scanned forever.
       const sortedInboxes = [...allInboxes].sort((a, b) => {
         const aContest = contestEmails.has(String(a.email || '').toLowerCase());
         const bContest = contestEmails.has(String(b.email || '').toLowerCase());
         if (aContest && !bContest) return -1;
         if (!aContest && bContest) return 1;
         return (b.messageCount || 0) - (a.messageCount || 0);
-      }).slice(0, maxInboxes);
+      });
+      const limit = Math.min(Math.max(0, Number(maxInboxes) || 0), sortedInboxes.length);
+      const priorityLimit = Math.min(limit, Math.max(20, Math.floor(limit * 0.25)));
+      const priority = sortedInboxes
+        .filter(inbox => contestEmails.has(String(inbox.email || '').toLowerCase()) || Number(inbox.messageCount || 0) > 0)
+        .slice(0, priorityLimit);
+      const priorityKeys = new Set(priority.map(inbox => inbox.id || String(inbox.email || '').toLowerCase()));
+      const rotatingPool = sortedInboxes.filter(inbox => !priorityKeys.has(inbox.id || String(inbox.email || '').toLowerCase()));
+      const rotatingSlots = Math.max(0, limit - priority.length);
+      const cycle = Math.floor(Date.now() / (5 * 60 * 1000));
+      const offset = rotatingPool.length && rotatingSlots ? (cycle * rotatingSlots) % rotatingPool.length : 0;
+      const rotating = [];
+      for (let i = 0; i < Math.min(rotatingSlots, rotatingPool.length); i++) {
+        rotating.push(rotatingPool[(offset + i) % rotatingPool.length]);
+      }
+      const cycleInboxes = [...priority, ...rotating];
 
-      console.log(`🔄 [TempSync] Starting bulk sync for ${sortedInboxes.length} temp inboxes (Interval: ${intervalMs}ms)...`);
+      console.log(`🔄 [TempSync] Starting rotating sync for ${cycleInboxes.length}/${sortedInboxes.length} temp inboxes (offset: ${offset}, interval: ${intervalMs}ms)...`);
 
       let totalNew = 0;
       let totalWinning = 0;
 
-      for (let i = 0; i < sortedInboxes.length; i++) {
-        const inbox = sortedInboxes[i];
+      for (let i = 0; i < cycleInboxes.length; i++) {
+        const inbox = cycleInboxes[i];
 
         // Check if rate limited
         if (this.service.isRateLimited()) {
@@ -197,23 +218,23 @@ class TempSyncService {
         if (result.hasWinning) totalWinning++;
 
         if (typeof onProgress === 'function') {
-          onProgress({ index: i + 1, total: sortedInboxes.length, current: inbox.email, result });
+          onProgress({ index: i + 1, total: cycleInboxes.length, current: inbox.email, result });
         }
 
         // Polite pause between requests to preserve API quotas
-        if (i < sortedInboxes.length - 1) {
+        if (i < cycleInboxes.length - 1) {
           await new Promise(r => setTimeout(r, intervalMs));
         }
       }
 
       this.lastSyncAt = new Date().toISOString();
       this.lastSyncStats = {
-        totalScanned: sortedInboxes.length,
+        totalScanned: cycleInboxes.length,
         newMessages: totalNew,
         winningFound: totalWinning
       };
 
-      console.log(`✅ [TempSync] Bulk sync completed: ${sortedInboxes.length} scanned, ${totalNew} new messages, ${totalWinning} winning messages.`);
+      console.log(`✅ [TempSync] Bulk sync completed: ${cycleInboxes.length} scanned, ${totalNew} new messages, ${totalWinning} winning messages.`);
       return { success: true, stats: this.lastSyncStats };
     } catch (e) {
       console.error('❌ [TempSync] Bulk sync failed:', e.message);
@@ -258,16 +279,25 @@ class TempSyncService {
     console.log(`🚀 [TempSync] Auto-Sync service started (Running every ${intervalMinutes} minutes)`);
 
     // Initial check after 10 seconds
-    setTimeout(() => {
+    this.initialTimer = setTimeout(() => {
+      this.initialTimer = null;
       this.syncContestInboxes().catch(() => {});
     }, 10000);
+
+    if (this.initialTimer.unref) this.initialTimer.unref();
 
     this.syncIntervalTimer = setInterval(() => {
       this.syncContestInboxes().catch(() => {});
     }, intervalMinutes * 60 * 1000);
+
+    if (this.syncIntervalTimer.unref) this.syncIntervalTimer.unref();
   }
 
   stopAutoSync() {
+    if (this.initialTimer) {
+      clearTimeout(this.initialTimer);
+      this.initialTimer = null;
+    }
     if (this.syncIntervalTimer) {
       clearInterval(this.syncIntervalTimer);
       this.syncIntervalTimer = null;

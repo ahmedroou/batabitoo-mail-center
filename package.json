@@ -2,13 +2,16 @@
   "name": "batabitoo-mail-center",
   "version": "1.0.0",
   "description": "Batabitoo Mail Center & Nivea Live Ingestion Dashboard",
-  "main": "inbox_server.js",
+  "main": "functions.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "server": "node inbox_server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/official_create_cost.test.js test/sync_cost_regression.test.js test/cloud_cost_regression.test.js test/cloud_freshness.test.js test/cloud_data_model.test.js test/mobile_access.test.js test/mail_center.test.js test/validators.test.js test/test_database_safety.test.js",
+    "test:integration": "node --test test/*.test.js",
+    "migrate:cloud:plan": "node scripts/migrate_full_manifest_to_cloud.cjs",
+    "migrate:cloud:stage": "node scripts/migrate_full_manifest_to_cloud.cjs --write"
   },
   "keywords": [
     "batabitoo",
@@ -18,8 +21,12 @@
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": "22"
+  },
   "dependencies": {
     "firebase-admin": "^14.4.0",
+    "firebase-functions": "^7.4.0",
     "iconv-lite": "^0.7.3",
     "imapflow": "^2.0.5",
     "mailparser": "^3.9.26",

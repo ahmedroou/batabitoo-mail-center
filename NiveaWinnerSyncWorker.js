@@ -6,12 +6,14 @@ const https = require('https');
 const db = require('./InboxDatabase');
 const content = require('./MailContent');
 const emailParser = require('./EmailParser');
+const { broadcast } = require('./eventBus');
 
 class NiveaWinnerSyncWorker {
   constructor() {
     this.intervalHours = 12;
     this.intervalMs = this.intervalHours * 60 * 60 * 1000;
     this.timer = null;
+    this.initialTimer = null;
     this.isRunning = false;
     this.lastScanAt = null;
     this.nextScanAt = null;
@@ -26,12 +28,15 @@ class NiveaWinnerSyncWorker {
 
     this.winnersFilePath = path.join(__dirname, 'nivea_our_confirmed_winners.json');
     this.altWinnersFilePath = path.join(__dirname, '..', 'dazzling-oppenheimer', 'nivea_our_confirmed_winners.json');
+    this.thirdWinnersFilePath = path.join(__dirname, '..', 'batabitoo-mail-center', 'nivea_our_confirmed_winners.json');
   }
 
   loadWinnersList() {
     let p = this.winnersFilePath;
     if (!fs.existsSync(p) && fs.existsSync(this.altWinnersFilePath)) {
       p = this.altWinnersFilePath;
+    } else if (!fs.existsSync(p) && fs.existsSync(this.thirdWinnersFilePath)) {
+      p = this.thirdWinnersFilePath;
     }
     if (!fs.existsSync(p)) {
       console.warn('⚠️ [NiveaWinnerSync] Winners list file not found at:', p);
@@ -48,6 +53,9 @@ class NiveaWinnerSyncWorker {
 
   /**
    * Determine if an email is GENUINELY a winning email (strict, no false positives)
+   * Must match both:
+   * 1. Contest entity (Nivea / Qiddiya / e-Copon / Scan & Draw)
+   * 2. Winning / Prize cue (Ticket / Voucher / Congratulations you won / Claim prize)
    */
   isGenuineWinningEmail(subject = '', text = '', from = '', html = '') {
     const combined = `${subject} ${text} ${from} ${html}`.toLowerCase();
@@ -127,7 +135,7 @@ class NiveaWinnerSyncWorker {
   }
 
   /**
-   * Fetch messages from Mail.tm
+   * Fetch messages from Mail.tm / Mail.gw
    */
   async fetchMailTm(email, password) {
     const host = email.includes('emalupe.com') ? 'api.mail.tm' : 'api.mail.gw';
@@ -157,14 +165,16 @@ class NiveaWinnerSyncWorker {
       });
       const full = fullRes?.data || m;
       messages.push({
-        id: m.id,
+        id: String(m.id),
         from: emailParser.formatAddress(full.from || m.from),
         to: email,
         subject: emailParser.decodeRfc2047(full.subject || m.subject || '(بدون عنوان)'),
         intro: full.intro || m.intro || '',
         text: full.text || full.intro || '',
         html: full.html && full.html.length > 0 ? (Array.isArray(full.html) ? full.html.join('') : full.html) : '',
-        createdAt: full.createdAt || m.createdAt || new Date().toISOString()
+        createdAt: full.createdAt || m.createdAt || new Date().toISOString(),
+        hasAttachments: Boolean(full.hasAttachments || (Array.isArray(full.attachments) && full.attachments.length > 0)),
+        attachments: Array.isArray(full.attachments) ? full.attachments : []
       });
     }
     return messages;
@@ -174,7 +184,7 @@ class NiveaWinnerSyncWorker {
    * Fetch messages from Inboxes.com
    */
   async fetchInboxesCom(email) {
-    const res = await this.httpsRequest(`https://inboxes.com/api/v2/inbox/${encodeURIComponent(email)}`);
+    const res = await this.httpsRequest(`https://getnada.com/api/v2/inbox/${encodeURIComponent(email)}`);
     if (!res || !res.data || !Array.isArray(res.data.msgs)) {
       return [];
     }
@@ -182,14 +192,23 @@ class NiveaWinnerSyncWorker {
     const messages = [];
     for (const m of res.data.msgs) {
       const msgId = m.uid || m.id;
-      // Fetch full body from inboxes.com
       let fullBody = '';
       let fullHtml = '';
+      let attachments = [];
       try {
-        const bodyRes = await this.httpsRequest(`https://inboxes.com/api/v2/message/${msgId}`);
+        const bodyRes = await this.httpsRequest(`https://getnada.com/api/v2/message/${msgId}`);
         if (bodyRes && bodyRes.data) {
           fullBody = bodyRes.data.text || bodyRes.data.html || '';
           fullHtml = bodyRes.data.html || '';
+          if (Array.isArray(bodyRes.data.at) && bodyRes.data.at.length > 0) {
+            attachments = bodyRes.data.at.map(a => ({
+              id: String(a.id),
+              filename: a.filename,
+              size: a.size,
+              contentType: a.type || 'application/pdf',
+              downloadUrl: `https://inboxes.com/api/v2/message/at/download/${a.id}/${encodeURIComponent(a.filename)}`
+            }));
+          }
         }
       } catch (e) {}
 
@@ -201,7 +220,9 @@ class NiveaWinnerSyncWorker {
         intro: m.s || '',
         text: fullBody || m.s || '',
         html: fullHtml || '',
-        createdAt: m.created_at || new Date().toISOString()
+        createdAt: m.created_at || new Date().toISOString(),
+        hasAttachments: attachments.length > 0,
+        attachments
       });
     }
     return messages;
@@ -230,12 +251,14 @@ class NiveaWinnerSyncWorker {
         return { success: false, reason: 'Empty winners list' };
       }
 
-      // Load Firestore inboxes cache for passwords
-      const localData = db.readLocal();
-      const localInboxes = localData.inboxes || [];
+      // Ensure Cloud Firestore cache is hydrated and ready
+      await db.ready();
+      const allInboxes = db.getAllInboxes();
       const passMap = new Map();
-      localInboxes.forEach(ib => {
-        if (ib.email && ib.password) passMap.set(ib.email.toLowerCase(), ib.password);
+      allInboxes.forEach(ib => {
+        if (ib.email && ib.password) {
+          passMap.set(String(ib.email).toLowerCase().trim(), ib.password);
+        }
       });
 
       let totalNewMessages = 0;
@@ -245,7 +268,7 @@ class NiveaWinnerSyncWorker {
 
       for (let i = 0; i < winners.length; i++) {
         const w = winners[i];
-        const email = (w.randomEmail || '').toLowerCase().trim();
+        const email = String(w.randomEmail || '').toLowerCase().trim();
         if (!email) continue;
 
         scannedCount++;
@@ -268,33 +291,75 @@ class NiveaWinnerSyncWorker {
             console.log(`📨 [NiveaWinnerSync] Found ${remoteMessages.length} message(s) for ${email} (${w.winnerName})!`);
 
             const toSave = [];
+            let hasNewGenuineWin = false;
+
             for (const msg of remoteMessages) {
               const winEval = this.isGenuineWinningEmail(msg.subject, msg.text, msg.from?.address || msg.from, msg.html);
 
               if (winEval.isGenuine) {
                 genuineWinningCount++;
+                hasNewGenuineWin = true;
                 console.log(`🎉🏆 [NiveaWinnerSync] GENUINE WINNING EMAIL CONFIRMED: "${msg.subject}" for ${w.winnerName}!`);
               }
 
               const normalized = await content.normalize(msg, msg.id, { complete: true });
+              const extractedOtp = emailParser.extractOtp(msg.text, msg.html, msg.subject) || normalized.otp || null;
+
               const fullRecord = {
                 ...normalized,
                 ...msg,
+                id: String(msg.id),
                 inboxEmail: email,
+                to: email,
+                from: emailParser.formatAddress(msg.from),
+                subject: msg.subject,
+                intro: (msg.text ? msg.text.slice(0, 140).trim() : msg.subject) || 'رسالة مسابقة',
+                text: msg.text,
+                html: msg.html,
+                otp: extractedOtp,
                 winnerName: w.winnerName,
                 winnerPhone: w.mobile,
                 winnerRank: w.drawRank,
                 isWinning: winEval.isGenuine,
                 winningTag: winEval.tag,
+                isOfficialDomain: false,
                 source: 'nivea_winner_sync',
+                contentComplete: true,
+                bodyStatus: 'available',
+                bodyStored: true,
+                hasAttachments: Boolean((msg.attachments && msg.attachments.length) || (normalized.attachments && normalized.attachments.length)),
+                attachments: (msg.attachments && msg.attachments.length) ? msg.attachments : (normalized.attachments || []),
+                createdAt: msg.createdAt || new Date().toISOString(),
                 savedLocallyAt: new Date().toISOString()
               };
+
               toSave.push(fullRecord);
               totalNewMessages++;
             }
 
-            // Save permanently in local database and sync to Cloud Firestore
+            // Save permanently in Cloud Firestore & partitioned memory cache
             await db.saveMessages(email, toSave);
+
+            // Update inbox winning flag if genuine winning email detected
+            if (hasNewGenuineWin) {
+              const inbox = db.findInboxByEmail(email);
+              if (inbox && !inbox.hasWinningMessage) {
+                inbox.hasWinningMessage = true;
+                inbox.winningTag = '🏆 رسالة مسابقة وفوز مؤكدة';
+                await db.saveInbox(inbox);
+                try {
+                  broadcast('inbox:updated', inbox);
+                } catch (_) {}
+              }
+            }
+
+            // Real-time broadcast to connected UI clients via SSE
+            try {
+              for (const savedMsg of toSave) {
+                broadcast('message:new', { inboxEmail: email, message: content.summary(savedMsg) });
+              }
+              broadcast('status:counts', db.getStatusCounts());
+            } catch (_) {}
           }
         } catch (err) {
           errorCount++;
@@ -346,9 +411,12 @@ class NiveaWinnerSyncWorker {
     console.log(`🚀 [NiveaWinnerSync] 12-Hour Scheduled Worker Activated (Interval: ${this.intervalHours}h)`);
 
     // Initial check after 25 seconds
-    setTimeout(() => {
+    this.initialTimer = setTimeout(() => {
+      this.initialTimer = null;
       this.runSync().catch(err => console.error('Initial sync error:', err.message));
     }, 25000);
+
+    if (this.initialTimer.unref) this.initialTimer.unref();
 
     this.timer = setInterval(() => {
       this.runSync().catch(err => console.error('Recurring sync error:', err.message));
@@ -358,6 +426,10 @@ class NiveaWinnerSyncWorker {
   }
 
   stopScheduler() {
+    if (this.initialTimer) {
+      clearTimeout(this.initialTimer);
+      this.initialTimer = null;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a1628">
+  <title>تذاكر أكوارابيا القدية | NIVEA Scan & Win</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a1628; --surface: #111d33; --card: #172340; --card-hover: #1d2d50;
+      --border: #223056; --border-light: #2a3a66;
+      --text: #e8ecf5; --text-muted: #8a97b8; --text-dim: #5c6a8a;
+      --accent: #3b82f6; --accent-hover: #60a5fa; --accent-bg: rgba(59,130,246,.08);
+      --green: #22c55e; --green-bg: rgba(34,197,94,.08); --green-border: rgba(34,197,94,.2);
+      --amber: #f59e0b; --amber-bg: rgba(245,158,11,.08); --amber-border: rgba(245,158,11,.2);
+      --red: #ef4444; --violet: #8b5cf6; --violet-bg: rgba(139,92,246,.06);
+      --radius: 10px; --radius-sm: 6px;
+      --shadow: 0 1px 3px rgba(0,0,0,.3), 0 4px 12px rgba(0,0,0,.2);
+      --font: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+    }
+    html { background: var(--bg); color: var(--text); font-family: var(--font); scroll-behavior: smooth; }
+    body { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); }
+
+    /* Header */
+    .top-bar {
+      position: sticky; top: 0; z-index: 100;
+      background: linear-gradient(135deg, var(--surface) 0%, #0e1a30 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex; align-items: center; gap: 10px;
+      backdrop-filter: blur(12px);
+    }
+    .top-bar .back-link {
+      color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; gap: 4px; white-space: nowrap;
+    }
+    .top-bar .back-link svg { width: 16px; height: 16px; transform: rotate(180deg); }
+    .top-bar h1 { font-size: 15px; font-weight: 800; flex: 1; text-align: center; }
+    .top-bar .badge {
+      background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+      padding: 2px 8px; border-radius: 99px; white-space: nowrap;
+    }
+
+    /* Stats Strip */
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 12px 6px; }
+    .stat-box {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 10px; text-align: center;
+    }
+    .stat-box.received { border-color: var(--green-border); background: var(--green-bg); }
+    .stat-box.pending { border-color: var(--amber-border); background: var(--amber-bg); }
+    .stat-box.total { border-color: var(--border-light); }
+    .stat-box strong { display: block; font-size: 22px; font-weight: 900; line-height: 1.2; }
+    .stat-box.received strong { color: var(--green); }
+    .stat-box.pending strong { color: var(--amber); }
+    .stat-box.total strong { color: var(--accent); }
+    .stat-box span { font-size: 10px; color: var(--text-muted); font-weight: 600; }
+
+    /* Search */
+    .search-bar {
+      padding: 8px 12px; position: sticky; top: 54px; z-index: 50;
+      background: var(--bg);
+    }
+    .search-bar input {
+      width: 100%; background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 14px 10px 36px;
+      color: var(--text); font-size: 13px; font-family: var(--font);
+      outline: none; transition: border-color .2s;
+    }
+    .search-bar input:focus { border-color: var(--accent); }
+    .search-bar input::placeholder { color: var(--text-dim); }
+    .search-bar .search-icon {
+      position: absolute; left: auto; right: 24px; top: 50%; transform: translateY(-50%);
+      color: var(--text-dim); pointer-events: none;
+    }
+    .search-bar .search-icon svg { width: 16px; height: 16px; }
+
+    /* Filters */
+    .filters { display: flex; gap: 6px; padding: 4px 12px 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .filters::-webkit-scrollbar { display: none; }
+    .filter-pill {
+      border: 1px solid var(--border); background: var(--card); color: var(--text-muted);
+      border-radius: 99px; padding: 5px 12px; font-size: 11px; font-weight: 600;
+      font-family: var(--font); cursor: pointer; white-space: nowrap;
+      transition: all .2s;
+    }
+    .filter-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .filter-pill b { font-weight: 700; margin-right: 3px; }
+
+    /* Ticket Cards Grid */
+    .cards { padding: 0 12px 16px; display: flex; flex-direction: column; gap: 6px; }
+
+    .ticket-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+      cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    .ticket-card:active, .ticket-card:hover { background: var(--card-hover); border-color: var(--border-light); }
+    .ticket-card.received { border-right: 3px solid var(--green); }
+    .ticket-card.pending { border-right: 3px solid var(--amber); opacity: .7; }
+
+    .ticket-card .rank-badge {
+      width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 800; flex-shrink: 0;
+    }
+    .ticket-card.received .rank-badge { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+    .ticket-card.pending .rank-badge { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+
+    .ticket-card .info { flex: 1; min-width: 0; }
+    .ticket-card .info .name { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ticket-card .info .meta { font-size: 10px; color: var(--text-muted); display: flex; gap: 8px; align-items: center; margin-top: 2px; }
+    .ticket-card .info .meta .city { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .ticket-card .actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .ticket-card .dl-btn {
+      width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--green-border);
+      background: var(--green-bg); color: var(--green);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all .15s;
+    }
+    .ticket-card .dl-btn:hover { background: var(--green); color: #fff; }
+    .ticket-card .dl-btn svg { width: 14px; height: 14px; }
+
+    .ticket-card .status-tag {
+      font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 99px;
+      white-space: nowrap;
+    }
+    .ticket-card.received .status-tag { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+    .ticket-card.pending .status-tag { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+
+    /* Detail Modal */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.7);
+      backdrop-filter: blur(4px); display: none; align-items: flex-end; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-sheet {
+      background: var(--surface); border-radius: 16px 16px 0 0; width: 100%; max-width: 500px;
+      max-height: 88dvh; overflow-y: auto; padding: 0 16px 24px;
+      animation: slideUp .25s ease-out;
+    }
+    @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } }
+    .modal-handle {
+      width: 36px; height: 4px; background: var(--border-light); border-radius: 2px;
+      margin: 10px auto 14px;
+    }
+    .modal-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .modal-header .rank-circle {
+      width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 900; background: var(--green-bg); color: var(--green);
+      border: 2px solid var(--green-border);
+    }
+    .modal-header .modal-title { flex: 1; }
+    .modal-header .modal-title h2 { font-size: 16px; font-weight: 800; }
+    .modal-header .modal-title .sub { font-size: 11px; color: var(--text-muted); }
+
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
+    .detail-item {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 8px 10px;
+    }
+    .detail-item.full { grid-column: 1 / -1; }
+    .detail-item label { font-size: 9px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .detail-item value { font-size: 12px; font-weight: 600; display: block; word-break: break-all; direction: ltr; text-align: right; }
+
+    .modal-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .modal-actions button {
+      flex: 1; padding: 10px; border-radius: var(--radius); border: none;
+      font-size: 13px; font-weight: 700; font-family: var(--font); cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-download { background: var(--green); color: #fff; }
+    .btn-download:active { background: #16a34a; }
+    .btn-close { background: var(--card); color: var(--text-muted); border: 1px solid var(--border) !important; }
+
+    /* Empty */
+    .empty { text-align: center; padding: 40px 20px; color: var(--text-dim); }
+    .empty h3 { font-size: 14px; margin-top: 8px; }
+
+    /* Download All FAB */
+    .fab-container { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; gap: 8px; }
+    .fab {
+      background: var(--accent); color: #fff; border: none; border-radius: 99px;
+      padding: 10px 18px; font-size: 12px; font-weight: 700; font-family: var(--font);
+      cursor: pointer; box-shadow: 0 4px 14px rgba(59,130,246,.4);
+      display: flex; align-items: center; gap: 6px;
+      transition: transform .15s, background .15s;
+    }
+    .fab:active { transform: scale(.95); }
+    .fab svg { width: 14px; height: 14px; }
+
+    /* Scroll-to-top */
+    .scroll-top {
+      position: fixed; bottom: 16px; right: 16px; z-index: 90;
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--card); border: 1px solid var(--border); color: var(--text-muted);
+      display: none; align-items: center; justify-content: center; cursor: pointer;
+    }
+    .scroll-top.show { display: flex; }
+
+    /* Loading */
+    .loading { text-align: center; padding: 40px; color: var(--text-dim); }
+    .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 10px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Desktop */
+    @media (min-width: 600px) {
+      .stats { grid-template-columns: repeat(3, 1fr); max-width: 500px; margin: 0 auto; }
+      .cards { max-width: 500px; margin: 0 auto; }
+      .search-bar, .filters { max-width: 500px; margin-left: auto; margin-right: auto; }
+      .top-bar { justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    <a href="/" class="back-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 6 6 6-6 6"/></svg>الرئيسية</a>
+    <h1>🎟️ تذاكر القدية</h1>
+    <span class="badge" id="badge-count">—</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat-box received"><strong id="stat-received">—</strong><span>مستلمة ✅</span></div>
+    <div class="stat-box pending"><strong id="stat-pending">—</strong><span>معلقة ⏳</span></div>
+    <div class="stat-box total"><strong id="stat-total">—</strong><span>إجمالي الفائزين</span></div>
+  </div>
+
+  <div class="search-bar">
+    <span class="search-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span>
+    <input type="search" id="search" placeholder="ابحث بالاسم أو الجوال أو رقم السحب أو المدينة...">
+  </div>
+
+  <div class="filters" id="filters">
+    <button class="filter-pill active" data-filter="all">الكل <b id="f-all">—</b></button>
+    <button class="filter-pill" data-filter="received">المستلمة <b id="f-received">—</b></button>
+    <button class="filter-pill" data-filter="pending">المعلقة <b id="f-pending">—</b></button>
+  </div>
+
+  <div class="cards" id="cards-container">
+    <div class="loading"><div class="spinner"></div><p>جاري تحميل بيانات التذاكر...</p></div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal-sheet" id="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-header">
+        <div class="rank-circle" id="m-rank"></div>
+        <div class="modal-title"><h2 id="m-name"></h2><div class="sub" id="m-sub"></div></div>
+      </div>
+      <div class="detail-grid" id="m-details"></div>
+      <div class="modal-actions">
+        <button class="btn-download" id="m-download" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+          تحميل التذكرة PDF
+        </button>
+        <button class="btn-close" id="m-close">إغلاق</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="scroll-top" id="scroll-top" aria-label="أعلى الصفحة">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m18 15-6-6-6 6"/></svg>
+  </button>
+
+<script>
+(function() {
+  'use strict';
+
+  let allTickets = [];
+  let currentFilter = 'all';
+  let searchQuery = '';
+
+  const $ = id => document.getElementById(id);
+  const container = $('cards-container');
+  const searchInput = $('search');
+  const modal = $('modal');
+
+  // Fetch data
+  async function loadData() {
+    try {
+      const res = await fetch('/tickets_data.json?t=' + Date.now());
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      allTickets = data.tickets || [];
+
+      $('stat-received').textContent = data.ticketsReceived || 0;
+      $('stat-pending').textContent = data.ticketsPending || 0;
+      $('stat-total').textContent = data.totalWinners || 0;
+      $('badge-count').textContent = (data.ticketsReceived || 0) + '/' + (data.totalWinners || 0);
+      $('f-all').textContent = allTickets.length;
+      $('f-received').textContent = data.ticketsReceived || 0;
+      $('f-pending').textContent = data.ticketsPending || 0;
+
+      renderCards();
+    } catch (e) {
+      container.innerHTML = '<div class="empty"><h3>تعذر تحميل البيانات</h3><p>' + e.message + '</p></div>';
+    }
+  }
+
+  function getFiltered() {
+    let list = allTickets;
+    if (currentFilter === 'received') list = list.filter(t => t.hasTicket);
+    else if (currentFilter === 'pending') list = list.filter(t => !t.hasTicket);
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(t =>
+        (t.winnerName || '').toLowerCase().includes(q) ||
+        (t.mobile || '').includes(q) ||
+        String(t.drawRank).includes(q) ||
+        (t.city || '').toLowerCase().includes(q) ||
+        (t.ticketMetadata?.bookingId || '').toLowerCase().includes(q) ||
+        (t.ticketMetadata?.ticketCode || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }
+
+  function renderCards() {
+    const filtered = getFiltered();
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="empty"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text-dim)"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><h3>لا توجد نتائج</h3></div>';
+      return;
+    }
+
+    const dlIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
+
+    container.innerHTML = filtered.map(t => {
+      const cls = t.hasTicket ? 'received' : 'pending';
+      const statusText = t.hasTicket ? 'مستلمة' : 'معلقة';
+      const meta = t.ticketMetadata;
+      const code = meta?.ticketCode ? meta.ticketCode.slice(0, 8) + '…' : '';
+
+      return `<div class="ticket-card ${cls}" data-rank="${t.drawRank}">
+        <div class="rank-badge">#${t.drawRank}</div>
+        <div class="info">
+          <div class="name">${t.winnerName || '—'}</div>
+          <div class="meta">
+            <span>${t.mobile || ''}</span>
+            <span class="city">${t.city || ''}</span>
+            ${code ? '<span style="direction:ltr;font-size:9px;color:var(--accent)">' + code + '</span>' : ''}
+          </div>
+        </div>
+        <span class="status-tag">${statusText}</span>
+        ${t.hasTicket && t.pdfFileName ? '<button class="dl-btn" data-pdf="' + t.pdfFileName + '" title="تحميل PDF">' + dlIcon + '</button>' : ''}
+      </div>`;
+    }).join('');
+
+    // Attach events
+    container.querySelectorAll('.ticket-card').forEach(card => {
+      card.addEventListener('click', function(e) {
+        if (e.target.closest('.dl-btn')) return;
+        const rank = parseInt(this.dataset.rank);
+        openDetail(rank);
+      });
+    });
+
+    container.querySelectorAll('.dl-btn').forEach(btn => {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        downloadPdf(this.dataset.pdf);
+      });
+    });
+  }
+
+  function downloadPdf(filename) {
+    const a = document.createElement('a');
+    a.href = '/tickets/' + encodeURIComponent(filename);
+    a.download = filename;
+    a.click();
+  }
+
+  function openDetail(rank) {
+    const t = allTickets.find(x => x.drawRank === rank);
+    if (!t) return;
+
+    $('m-rank').textContent = '#' + t.drawRank;
+    $('m-rank').style.background = t.hasTicket ? 'var(--green-bg)' : 'var(--amber-bg)';
+    $('m-rank').style.color = t.hasTicket ? 'var(--green)' : 'var(--amber)';
+    $('m-rank').style.borderColor = t.hasTicket ? 'var(--green-border)' : 'var(--amber-border)';
+    $('m-name').textContent = t.winnerName;
+    $('m-sub').textContent = t.hasTicket ? 'تذكرة مستلمة ومؤكدة ✅' : 'في انتظار إرسال التذكرة ⏳';
+
+    const meta = t.ticketMetadata || {};
+    const items = [
+      ['رقم الجوال', t.mobile],
+      ['المدينة', t.city],
+      ['رقم الإيصال', t.receiptNumber],
+      ['رقم السحب', '#' + t.drawRank],
+    ];
+
+    if (t.hasTicket && meta.bookingId) {
+      items.push(
+        ['رقم الحجز (Booking ID)', meta.bookingId],
+        ['كود التذكرة (QR)', meta.ticketCode],
+        ['صالحة من', meta.validFrom],
+        ['صالحة حتى', meta.validTo],
+        ['تاريخ الشراء', meta.purchaseDate],
+        ['نوع التذكرة', meta.ticketType || 'Single Day Park Ticket'],
+      );
+    }
+
+    if (t.emailSubject) items.push(['عنوان الرسالة', t.emailSubject]);
+    if (t.emailReceivedAt) items.push(['تاريخ الاستلام', new Date(t.emailReceivedAt).toLocaleString('ar-SA')]);
+    if (t.pdfSize) items.push(['حجم الملف', (t.pdfSize / 1024).toFixed(0) + ' KB']);
+
+    $('m-details').innerHTML = items.map((pair, i) => {
+      const full = pair[1] && pair[1].length > 30 ? ' full' : '';
+      return `<div class="detail-item${full}"><label>${pair[0]}</label><value>${pair[1] || '—'}</value></div>`;
+    }).join('');
+
+    const dlBtn = $('m-download');
+    if (t.hasTicket && t.pdfFileName) {
+      dlBtn.style.display = '';
+      dlBtn.onclick = () => downloadPdf(t.pdfFileName);
+    } else {
+      dlBtn.style.display = 'none';
+    }
+
+    modal.classList.add('open');
+  }
+
+  // Close modal
+  $('m-close').addEventListener('click', () => modal.classList.remove('open'));
+  modal.addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+
+  // Search
+  let searchTimeout;
+  searchInput.addEventListener('input', function() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      searchQuery = this.value.trim();
+      renderCards();
+    }, 200);
+  });
+
+  // Filters
+  $('filters').addEventListener('click', function(e) {
+    const pill = e.target.closest('.filter-pill');
+    if (!pill) return;
+    this.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentFilter = pill.dataset.filter;
+    renderCards();
+  });
+
+  // Scroll to top
+  const scrollBtn = $('scroll-top');
+  window.addEventListener('scroll', () => {
+    scrollBtn.classList.toggle('show', window.scrollY > 300);
+  });
+  scrollBtn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+  // Init
+  loadData();
+})();
+</script>
+</body>
+</html>

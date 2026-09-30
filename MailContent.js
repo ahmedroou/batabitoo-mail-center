@@ -2,26 +2,40 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const sanitizeHtml = require('sanitize-html');
+const { getStorage } = require('firebase-admin/storage');
 const parser = require('./EmailParser');
 
-const ROOT = path.resolve(process.env.MAIL_DATA_DIR || path.join(__dirname, 'private', 'mail'));
 const VERSION = 4;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-const directory = id => path.join(ROOT, hash(String(id)));
+const storagePrefix = id => `mail-content/${hash(String(id))}`;
 const scalar = value => typeof value === 'string' ? value : Array.isArray(value) ? value.filter(v => typeof v === 'string').join('\n') : '';
 const missingText = 'محتوى هذه الرسالة غير متوفر في النسخة المستلمة. لم نحصل على النص أو الصور الأصلية من المصدر.';
 
-function archive(id, payload) {
+function isPdfTruncated(buf) {
+  if (!buf || buf.length < 100) return false;
+  if (buf.slice(0, 4).toString() !== '%PDF') return false;
+  const tail = buf.slice(-1024).toString('latin1');
+  const m = tail.match(/startxref\s+(\d+)\s+%%EOF/);
+  if (!m) return true;
+  const xrefOffset = parseInt(m[1], 10);
+  if (xrefOffset >= buf.length) return true;
+  return false;
+}
+
+async function archive(id, payload) {
   try {
-    const dir = directory(id);
-    fs.mkdirSync(dir, { recursive: true });
+    const bucket = getStorage().bucket();
     const raw = payload.rawBase64 ? Buffer.from(payload.rawBase64, 'base64') : payload.raw ? Buffer.from(payload.raw) : null;
     const source = Buffer.from(JSON.stringify(payload));
-    const filename = `source-${hash(source)}.json`;
-    if (!fs.existsSync(path.join(dir, filename))) fs.writeFileSync(path.join(dir, filename), source);
+    bucket.file(`${storagePrefix(id)}/source-${hash(source)}.json`).save(source, {
+      resumable: false,
+      metadata: { contentType: 'application/json' }
+    }).catch(e => console.error('Archive source error:', e.message));
     if (raw) {
-      const rawPath = path.join(dir, `original-${hash(raw)}.eml`);
-      if (!fs.existsSync(rawPath)) fs.writeFileSync(rawPath, raw);
+      bucket.file(`${storagePrefix(id)}/original-${hash(raw)}.eml`).save(raw, {
+        resumable: false,
+        metadata: { contentType: 'message/rfc822' }
+      }).catch(e => console.error('Archive raw error:', e.message));
     }
   } catch (e) {
     console.error('Archive error:', e.message);
@@ -56,7 +70,7 @@ function sanitizeBody(html) {
 }
 
 async function normalize(payload, id, options = {}) {
-  archive(id, payload);
+  archive(id, payload).catch(e => console.error('Archive defer error:', e?.message));
   let originalHtml = scalar(payload.html || payload['body-html']);
   let text = scalar(payload.text || payload['body-plain'] || payload.body);
   if (payload.bodyStatus === 'unavailable' && !payload.raw && !payload.rawBase64) { originalHtml = ''; text = ''; }
@@ -77,22 +91,45 @@ async function normalize(payload, id, options = {}) {
     text = parser.stripHtmlTags(originalHtml);
   }
 
-  const dir = directory(id);
   const attachments = [];
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    let bucket = null;
+    try { bucket = getStorage().bucket(); } catch (_) {}
     for (const [index, item] of (decoded.attachments || payload.attachments || []).entries()) {
       const content = Buffer.isBuffer(item.content) ? item.content : item.contentBase64 ? Buffer.from(item.contentBase64, 'base64') : null;
-      if (!content) continue;
+      if (!content) {
+        if (item.id || item.filename || item.downloadUrl) {
+          attachments.push({
+            id: String(item.id || `att-${index + 1}`),
+            filename: item.filename || `attachment-${index + 1}`,
+            contentType: item.contentType || item.type || 'application/octet-stream',
+            size: item.size || 0,
+            cid: (item.cid || item.contentId || '').replace(/^<|>$/g, ''),
+            inline: item.related === true || item.contentDisposition === 'inline' || item.inline === true,
+            downloadUrl: item.downloadUrl || null,
+            storagePath: item.storagePath || null
+          });
+        }
+        continue;
+      }
       const key = hash(content);
-      fs.writeFileSync(path.join(dir, `${key}.bin`), content);
+      const storagePath = `${storagePrefix(id)}/attachments/${key}.bin`;
+      if (bucket) {
+        try {
+          await bucket.file(storagePath).save(content, {
+            resumable: false,
+            metadata: { contentType: item.contentType || 'application/octet-stream' }
+          });
+        } catch (_) {}
+      }
       attachments.push({
         id: key,
         filename: item.filename || `attachment-${index + 1}`,
         contentType: item.contentType || 'application/octet-stream',
         size: content.length,
         cid: (item.cid || item.contentId || '').replace(/^<|>$/g, ''),
-        inline: item.related === true || item.contentDisposition === 'inline'
+        inline: item.related === true || item.contentDisposition === 'inline',
+        storagePath
       });
     }
   } catch (e) {
@@ -117,17 +154,14 @@ async function normalize(payload, id, options = {}) {
     finalRenderedHtml = render({ id }, { html: parser.formatPlainTextToHtml(attachments.length ? 'مرفقات الرسالة' : missingText), text, attachments });
   }
 
-  try {
-    const document = { html: originalHtml || parser.formatPlainTextToHtml(text || (attachments.length ? 'مرفقات الرسالة' : missingText)), text, attachments, originalHtml: Boolean(originalHtml) };
-    fs.writeFileSync(path.join(dir, 'body.json'), JSON.stringify(document));
-  } catch (e) {}
+  const cleanIntroText = available ? parser.cleanPlainText(parser.decodeBase64Text(text)) : '';
 
   return {
     id,
     from: from || '',
     to: to || '',
     subject,
-    intro: available ? text.replace(/\s+/g, ' ').slice(0, 140) : 'محتوى الرسالة غير متوفر من المصدر',
+    intro: available ? cleanIntroText.replace(/\s+/g, ' ').slice(0, 140) : 'محتوى الرسالة غير متوفر من المصدر',
     text: text.slice(0, 32000),
     html: finalRenderedHtml,
     attachments,
@@ -143,13 +177,9 @@ async function normalize(payload, id, options = {}) {
 }
 
 function readBody(message) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(directory(message.id), 'body.json'), 'utf8'));
-  } catch {
-    if (message.html) return { html: message.html, text: message.text || '', attachments: message.attachments || [] };
-    if (message.text) return { html: parser.formatPlainTextToHtml(message.text), text: message.text, attachments: [] };
-    return { html: parser.formatPlainTextToHtml(missingText), text: '', attachments: [] };
-  }
+  if (message.html) return { html: message.html, text: message.text || '', attachments: message.attachments || [] };
+  if (message.text) return { html: parser.formatPlainTextToHtml(message.text), text: message.text, attachments: message.attachments || [] };
+  return { html: parser.formatPlainTextToHtml(missingText), text: '', attachments: message.attachments || [] };
 }
 
 function hasVisibleContent(htmlStr) {
@@ -192,17 +222,21 @@ function render(message, suppliedBody) {
     html = parser.formatPlainTextToHtml(missingText);
   }
 
-  // Replace cid: images with base64 data URLs if found on disk
+  // If already rendered into our complete document template, avoid double wrapping
+  if (typeof html === 'string' && /^\s*<!doctype\s+html/i.test(html) && html.includes('id="mail-root"')) {
+    for (const item of attachments) {
+      if (!item.cid || !/^image\/(?:png|jpeg|jpg|gif|webp)$/i.test(item.contentType)) continue;
+      const cid = item.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      html = html.replace(new RegExp(`cid:${cid}`, 'gi'), `/api/messages/${encodeURIComponent(message.id)}/attachments/${item.id}`);
+    }
+    return html;
+  }
+
+  // Replace cid images with authenticated same-origin Firebase Storage proxies.
   for (const item of attachments) {
     if (!item.cid || !/^image\/(?:png|jpeg|jpg|gif|webp)$/i.test(item.contentType)) continue;
-    try {
-      const binFile = path.join(directory(message.id), `${item.id}.bin`);
-      if (fs.existsSync(binFile)) {
-        const content = fs.readFileSync(binFile);
-        const cid = item.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        html = html.replace(new RegExp(`cid:${cid}`, 'gi'), `data:${item.contentType || 'image/png'};base64,${content.toString('base64')}`);
-      }
-    } catch (e) {}
+    const cid = item.cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = html.replace(new RegExp(`cid:${cid}`, 'gi'), `/api/messages/${encodeURIComponent(message.id)}/attachments/${item.id}`);
   }
 
   // Preserve the sender's body direction/styles without nesting full documents.
@@ -285,158 +319,110 @@ function detail(message) {
   };
 }
 
-function attachment(message, id) {
-  if (!/^[a-f0-9]{64}$/.test(id)) return null;
-  const meta = readBody(message).attachments.find(item => item.id === id);
+async function attachment(message, id) {
+  if (!message) return null;
+  const list = (message.attachments || readBody(message).attachments || []);
+  const meta = list.find(item => String(item.id) === String(id) || item.filename === id);
   if (!meta) return null;
-  return { ...meta, content: fs.readFileSync(path.join(directory(message.id), `${id}.bin`)) };
+
+  // Prefer the durable cloud copy. Local ticket paths from legacy imports are
+  // not available on Cloud Run and must not be treated as authoritative bytes.
+  if (meta.storagePath) {
+    try {
+      const [content] = await getStorage().bucket().file(meta.storagePath).download();
+      if (content && !isPdfTruncated(content)) {
+        return { ...meta, content };
+      }
+    } catch (_) {}
+  }
+
+  // 1. If downloadedPdf file path is set and exists
+  const legacyRoot = path.resolve(__dirname, '..', 'dazzling-oppenheimer', 'downloaded_tickets_pdf');
+  const legacyFile = message.downloadedPdf && path.resolve(message.downloadedPdf);
+  if (legacyFile && legacyFile.startsWith(legacyRoot + path.sep) && list.filter(item => /\.pdf$/i.test(item.filename || '')).length === 1 && /\.pdf$/i.test(meta.filename || '') && fs.existsSync(legacyFile)) {
+    try {
+      const content = fs.readFileSync(message.downloadedPdf);
+      if (content && !isPdfTruncated(content)) {
+        return {
+          id: meta?.id || id,
+          filename: meta?.filename || path.basename(message.downloadedPdf),
+          contentType: meta?.contentType || 'application/pdf',
+          size: content.length,
+          inline: false,
+          content
+        };
+      }
+    } catch (_) {}
+  }
+
+  // 2. Check local downloaded tickets directory
+  const localDirs = [
+    path.join(__dirname, 'downloads'),
+    path.join(__dirname, '..', 'dazzling-oppenheimer', 'downloaded_tickets_pdf'),
+    path.join(__dirname, 'downloaded_tickets_pdf')
+  ];
+  for (const dir of localDirs) {
+    if (!fs.existsSync(dir)) continue;
+    // Check if any pdf file in directory corresponds to this message or winner
+    if (meta?.filename && path.basename(meta.filename) === meta.filename && !meta.filename.includes('\\')) {
+      const candidate = path.join(dir, meta.filename);
+      if (fs.existsSync(candidate)) {
+        try {
+          const content = fs.readFileSync(candidate);
+          if (content && !isPdfTruncated(content)) {
+            return { ...meta, size: content.length, content };
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  // 3. If storagePath exists in Firebase Storage
+  if (meta?.storagePath) {
+    try {
+      const [content] = await getStorage().bucket().file(meta.storagePath).download();
+      if (content && !isPdfTruncated(content)) {
+        return { ...meta, content };
+      }
+    } catch (_) {}
+  }
+
+  return meta || null;
 }
 
 function recoverSource(message) {
-  const dir = directory(message.id);
-  if (!fs.existsSync(dir)) return message;
-  const originals = fs.readdirSync(dir).filter(name => /^original-[a-f0-9]+\.eml$/.test(name));
-  if (originals.length) {
-    originals.sort((a, b) => fs.statSync(path.join(dir, b)).size - fs.statSync(path.join(dir, a)).size);
-    return { ...message, html: '', text: '', rawBase64: fs.readFileSync(path.join(dir, originals[0])).toString('base64') };
-  }
-  const body = readBody(message);
-  return { ...message, html: body.html, text: body.text, attachments: body.attachments.map(item => ({ ...item, contentBase64: fs.existsSync(path.join(dir, `${item.id}.bin`)) ? fs.readFileSync(path.join(dir, `${item.id}.bin`)).toString('base64') : undefined })) };
+  return message;
 }
 
-function purge(messageId) {
+async function purge(messageId) {
   if (!messageId) return false;
   try {
-    const dir = directory(messageId);
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-      return true;
-    }
+    await getStorage().bucket().deleteFiles({ prefix: `${storagePrefix(messageId)}/` });
+    return true;
   } catch (e) {
     console.error(`Purge error for message ${messageId}:`, e.message);
   }
   return false;
 }
 
-function getDirSize(dirPath) {
-  let size = 0;
-  try {
-    const files = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const f of files) {
-      const full = path.join(dirPath, f.name);
-      if (f.isDirectory()) size += getDirSize(full);
-      else if (f.isFile()) size += fs.statSync(full).size;
-    }
-  } catch (e) {}
-  return size;
-}
-
 function purgeOrphans(validMessageIds = []) {
-  let cleanedCount = 0;
-  let freedBytes = 0;
-  try {
-    if (!fs.existsSync(ROOT)) return { cleanedCount, freedBytes };
-    const idList = Array.isArray(validMessageIds) ? validMessageIds : Array.from(validMessageIds || []);
-    const validHashes = new Set(idList.map(id => hash(String(id))));
-    const entries = fs.readdirSync(ROOT, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name === 'backups') continue;
-      if (!validHashes.has(entry.name)) {
-        const fullPath = path.join(ROOT, entry.name);
-        try {
-          const stats = getDirSize(fullPath);
-          freedBytes += stats;
-          fs.rmSync(fullPath, { recursive: true, force: true });
-          cleanedCount++;
-        } catch (err) {}
-      }
-    }
-  } catch (e) {
-    console.error('purgeOrphans error:', e.message);
-  }
-  return { cleanedCount, freedBytes };
+  return { cleanedCount: 0, freedBytes: 0 };
 }
 
 function pruneRawFiles(maxAgeDays = 3) {
-  let prunedCount = 0;
-  let freedBytes = 0;
-  const cutoffTime = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-  try {
-    if (!fs.existsSync(ROOT)) return { prunedCount, freedBytes };
-    const dirs = fs.readdirSync(ROOT, { withFileTypes: true }).filter(d => d.isDirectory() && d.name !== 'backups');
-    for (const d of dirs) {
-      const dirPath = path.join(ROOT, d.name);
-      const hasBody = fs.existsSync(path.join(dirPath, 'body.json'));
-      if (!hasBody) continue;
-      const files = fs.readdirSync(dirPath);
-      for (const file of files) {
-        if (/^original-[a-f0-9]+\.eml$/.test(file) || /^source-[a-f0-9]+\.json$/.test(file)) {
-          const filePath = path.join(dirPath, file);
-          const stat = fs.statSync(filePath);
-          if (stat.mtimeMs < cutoffTime) {
-            freedBytes += stat.size;
-            fs.unlinkSync(filePath);
-            prunedCount++;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.error('pruneRawFiles error:', e.message);
-  }
-  return { prunedCount, freedBytes };
+  return { prunedCount: 0, freedBytes: 0 };
 }
 
 function cleanupBackups(keepLast = 3) {
-  let deletedCount = 0;
-  let freedBytes = 0;
-  const backupDir = path.join(ROOT, 'backups');
-  try {
-    if (!fs.existsSync(backupDir)) return { deletedCount, freedBytes };
-    const files = fs.readdirSync(backupDir).filter(f => /^messages-\d+\.json$/.test(f));
-    if (files.length > keepLast) {
-      files.sort((a, b) => {
-        const timeA = parseInt(a.replace('messages-', '').replace('.json', ''), 10) || 0;
-        const timeB = parseInt(b.replace('messages-', '').replace('.json', ''), 10) || 0;
-        return timeB - timeA;
-      });
-      const toDelete = files.slice(keepLast);
-      for (const f of toDelete) {
-        const p = path.join(backupDir, f);
-        freedBytes += fs.statSync(p).size;
-        fs.unlinkSync(p);
-        deletedCount++;
-      }
-    }
-  } catch (e) {
-    console.error('cleanupBackups error:', e.message);
-  }
-  return { deletedCount, freedBytes };
+  return { deletedCount: 0, freedBytes: 0 };
 }
 
 function getStorageStats() {
-  let totalBytes = 0;
-  let messageDirs = 0;
-  try {
-    if (fs.existsSync(ROOT)) {
-      const entries = fs.readdirSync(ROOT, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = path.join(ROOT, entry.name);
-        if (entry.isDirectory()) {
-          if (entry.name !== 'backups') messageDirs++;
-          totalBytes += getDirSize(full);
-        } else if (entry.isFile()) {
-          totalBytes += fs.statSync(full).size;
-        }
-      }
-    }
-  } catch (e) {}
   return {
-    totalBytes,
-    totalMegabytes: (totalBytes / (1024 * 1024)).toFixed(2),
-    messageDirs,
-    rootPath: ROOT
+    totalBytes: 0,
+    totalMegabytes: '0.00',
+    messageDirs: 0,
+    storage: 'firebase'
   };
 }
 
@@ -453,7 +439,6 @@ module.exports = {
   pruneRawFiles,
   cleanupBackups,
   getStorageStats,
-  ROOT,
   VERSION,
   sanitizeBody
 };

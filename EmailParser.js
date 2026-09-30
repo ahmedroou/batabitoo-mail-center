@@ -148,36 +148,90 @@ function stripTransportHeaders(str) {
   return cleaned.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+const WIN1252_MAP = {
+  0x20AC:0x80, 0x201A:0x82, 0x0192:0x83, 0x201E:0x84, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87,
+  0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A, 0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x2018:0x91,
+  0x2019:0x92, 0x201C:0x93, 0x201D:0x94, 0x2022:0x95, 0x2013:0x96, 0x2014:0x97, 0x02DC:0x98,
+  0x2122:0x99, 0x0161:0x9A, 0x203A:0x9B, 0x0153:0x9C, 0x017E:0x9E, 0x0178:0x9F
+};
+
+function fixMojibake(str) {
+  if (!str || typeof str !== 'string') return '';
+  if (!/[\u00D8\u00D9\u00C2-\u00DF]/.test(str)) return str;
+  try {
+    const bytes = [];
+    for (let i = 0; i < str.length; i++) {
+      const code = str.charCodeAt(i);
+      if (code < 256) bytes.push(code);
+      else if (WIN1252_MAP[code]) bytes.push(WIN1252_MAP[code]);
+      else return str;
+    }
+    const decoded = Buffer.from(bytes).toString('utf8');
+    if (decoded && !decoded.includes('\uFFFD') && /[\u0600-\u06FF]/.test(decoded)) return decoded;
+  } catch (_) {}
+  return str;
+}
+
 function decodeBase64Text(str) {
   if (!str || typeof str !== 'string') return '';
-  const clean = str.trim();
-  if (clean.length > 20 && /^[A-Za-z0-9+/=\r\n]+$/.test(clean)) {
-    try {
-      const decoded = Buffer.from(clean.replace(/\s+/g, ''), 'base64').toString('utf8');
-      if (decoded && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded) && /[\u0600-\u06FF\w]/.test(decoded)) {
+  const trimmed = str.trim();
+  if (/\b[a-zA-Z]{1,15}\s+[a-zA-Z]{1,15}\s+[a-zA-Z]{1,15}\b/.test(trimmed)) return str;
+  const stripped = trimmed.replace(/\s+/g, '');
+  if (stripped.length < 16 || stripped.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(stripped)) {
+    return str;
+  }
+  try {
+    const decoded = Buffer.from(stripped, 'base64').toString('utf8');
+    if (decoded && !decoded.includes('\uFFFD') && !/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded)) {
+      if (/[\u0600-\u06FF]{2,}/.test(decoded) || (/[a-zA-Z]{3,}/.test(decoded) && /\s/.test(decoded))) {
         return decoded;
       }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
   return str;
 }
 
 function cleanPlainText(value) {
   if (!value || typeof value !== 'string') return '';
   let text = value.replace(/\r\n/g, '\n');
-  if (text.includes('=D8=') || text.includes('=D9=') || text.includes('=\n')) {
+  text = fixMojibake(text);
+  if (text.includes('=D8=') || text.includes('=D9=') || (text.includes('=\n') && text.includes('='))) {
     text = decodeQuotedPrintable(text);
   }
   text = decodeBase64Text(text);
+  text = fixMojibake(text);
   text = stripTransportHeaders(text);
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function extractOtp(text, subject) {
-  const input = normalizeArabicDigits(`${subject || ''}\n${text || ''}`);
+function extractOtp(text, secondArg, thirdArg) {
+  let subject = '';
+  let html = '';
+  let body = String(text || '');
+
+  if (thirdArg !== undefined) {
+    // 3 arguments provided: extractOtp(text, html, subject)
+    html = secondArg || '';
+    subject = thirdArg || '';
+  } else if (secondArg !== undefined) {
+    // 2 arguments provided: extractOtp(text, subject) or extractOtp(text, html)
+    if (typeof secondArg === 'string' && (/<[a-z][\s\S]*>/i.test(secondArg) || /<!DOCTYPE|<html>|<div|<p|<span|<br/i.test(secondArg))) {
+      html = secondArg;
+      subject = '';
+    } else {
+      subject = secondArg || '';
+    }
+  }
+
+  let htmlText = '';
+  if (html && typeof html === 'string') {
+    htmlText = stripHtmlTags(html);
+  }
+
+  const input = normalizeArabicDigits(`${subject || ''}\n${body || ''}\n${htmlText || ''}`);
   
   // 1. Specific keywords in Arabic & English
-  const match = input.match(/(?:رمز\s*(?:التحقق|التأكيد|التفعيل|الدخول|الأمان|المرور)|كود\s*(?:التحقق|التأكيد|التفعيل|الدخول)|verification\s*code|security\s*code|one-time\s*(?:password|code)|\botp\b|your\s*code|access\s*code|password\s*reset\s*code)[^\d\n]{0,60}[\s:=-]*([0-9]{4,8})\b/i);
+  const match = input.match(/(?:رمز\s*(?:التحقق|التأكيد|التفعيل|الدخول|الأمان|المرور)|كود\s*(?:التحقق|التأكيد|التفعيل|الدخول)|verification\s*code|security\s*code|one-time\s*(?:password|code)|\botp\b|your\s*code|access\s*code|password\s*reset\s*code|\bcode\b)[^\d\n]{0,60}[\s:=-]*([0-9]{4,8})\b/i);
   if (match) return match[1];
 
   // 2. Standalone digits on dedicated lines
@@ -236,6 +290,13 @@ async function parseRawEmail(raw) {
     if (!text && html) {
       text = stripHtmlTags(html);
     }
+    if (!text && !html) {
+      const rawStr = typeof raw === 'string' ? raw : raw.toString('utf8');
+      const bodyPart = rawStr.split(/\r?\n\r?\n/).slice(1).join('\n\n');
+      if (bodyPart) {
+        text = cleanPlainText(bodyPart);
+      }
+    }
     if (!html && text) {
       html = formatPlainTextToHtml(text);
     }
@@ -287,6 +348,7 @@ module.exports = {
   formatAddress,
   cleanSenderName,
   looksLikeMime,
+  fixMojibake,
   escape
 };
 

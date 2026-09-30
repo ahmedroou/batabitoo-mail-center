@@ -61,10 +61,14 @@ data class Inbox(
     val isRealGmail: Boolean = false,
     val isDottedGmailAlias: Boolean = false,
     val parentEmail: String = "",
+    val gmailAuthType: String = "",
 ) {
     val isConfirmedBanned: Boolean get() = banStatus == "confirmed" || isBanned
     val isSuspected: Boolean get() = banStatus == "suspected"
     val isGmailDomain: Boolean get() = isRealGmail || isDottedGmailAlias || email.lowercase().endsWith("@gmail.com")
+    // A dot in a genuine Gmail address is not sufficient evidence of an alias.
+    val isAmazonOnlyAlias: Boolean get() = isDottedGmailAlias ||
+        (isGmailDomain && parentEmail.isNotBlank() && !parentEmail.trim().equals(email.trim(), ignoreCase = true))
     val isBatabitooDomain: Boolean get() = email.lowercase().endsWith("@batabitoo.com")
 }
 
@@ -73,6 +77,8 @@ data class MailMessage(
     val from: String = "",
     val to: String = "",
     val inboxEmail: String = "",
+    val exactRecipient: String = "",
+    val parentEmail: String = "",
     val subject: String = "",
     val intro: String = "",
     val text: String = "",
@@ -82,12 +88,67 @@ data class MailMessage(
     val isOfficial: Boolean = false,
     val isAmazon: Boolean = false,
     val isBanned: Boolean = false,
+    val isWinning: Boolean = false,
     val banReason: String = "",
     val bodyStatus: String = "",
     val attachments: List<MailAttachment> = emptyList(),
 )
 
-data class MailAttachment(val id: String, val filename: String, val size: Long = 0, val inline: Boolean = false)
+data class MailAttachment(
+    val id: String,
+    val filename: String,
+    val size: Long = 0,
+    val inline: Boolean = false,
+    val contentType: String = "application/octet-stream",
+    val cid: String = "",
+)
+
+data class GmailAccount(
+    val email: String,
+    val authType: String = "",
+    val personName: String = "",
+    val status: String = "disconnected",
+    val lastError: String = "",
+    val lastSyncAt: String = "",
+    val connectedAt: String = "",
+    val syncedCount: Int = 0,
+)
+
+data class GmailAccountsPayload(
+    val success: Boolean = false,
+    val accounts: List<GmailAccount> = emptyList(),
+)
+
+data class GmailActionResult(
+    val success: Boolean = false,
+    val email: String = "",
+    val newCount: Int = 0,
+    val syncWarning: String = "",
+)
+
+data class OAuthAuthUrl(
+    val success: Boolean = false,
+    val authUrl: String = "",
+    val redirectUri: String = "",
+)
+
+data class DeletedAmazonAccount(val email: String)
+
+data class AmazonAccountMutation(
+    val success: Boolean = false,
+    val email: String = "",
+)
+
+data class BatchDeleteResult(
+    val success: Boolean = false,
+    val count: Int = 0,
+)
+
+data class WinningMessagesPayload(
+    val success: Boolean = false,
+    val count: Int = 0,
+    val messages: List<MailMessage> = emptyList(),
+)
 
 data class RegistrationLog(
     val index: Int,
@@ -106,6 +167,7 @@ data class InboxesPayload(
     val amazon: List<Inbox> = emptyList(),
     val banned: List<Inbox> = emptyList(),
     val suspected: List<Inbox> = emptyList(),
+    val deletedAmazon: List<DeletedAmazonAccount> = emptyList(),
 )
 
 data class CurrentPayload(val inbox: Inbox? = null, val messages: List<MailMessage> = emptyList())
@@ -118,6 +180,36 @@ data class MessagesPayload(
     val bannedCount: Int = 0,
     val suspectedCount: Int = 0,
 )
+
+/**
+ * Matches a message to an inbox without collapsing dotted Gmail aliases into
+ * the parent mailbox. The backend persists exactRecipient and parentEmail for
+ * Gmail messages; older records are matched using parsed address candidates.
+ */
+fun messageBelongsToInbox(message: MailMessage, inbox: Inbox): Boolean {
+    val target = normalizeEmail(inbox.email)
+    if (target.isBlank()) return false
+
+    val exact = normalizeEmail(message.exactRecipient)
+    val storedInbox = normalizeEmail(message.inboxEmail)
+    val parent = normalizeEmail(message.parentEmail)
+    val recipients = extractEmails(message.to)
+
+    if (inbox.isDottedGmailAlias) {
+        return exact == target || storedInbox == target || target in recipients
+    }
+
+    if (exact == target || storedInbox == target || target in recipients) return true
+    return inbox.isGmailDomain && parent == target
+}
+
+private fun normalizeEmail(value: String): String = value.trim().lowercase()
+
+private fun extractEmails(value: String): Set<String> {
+    if (value.isBlank()) return emptySet()
+    val emailPattern = Regex("""[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}""", RegexOption.IGNORE_CASE)
+    return emailPattern.findAll(value).map { normalizeEmail(it.value) }.toSet()
+}
 
 object AmazonDetector {
     private val KEYWORDS = listOf(
@@ -142,16 +234,15 @@ object AmazonDetector {
         if (!isOfficialInbox(inbox)) return false
 
         // Fast path: if already classified as Amazon or Banned, return true immediately (O(1), no re-reviewing)
-        if (inbox.isAmazon || inbox.isBanned) return true
+        if (inbox.isAmazon || inbox.isBanned || inbox.isAmazonOnlyAlias) return true
 
         // Check metadata
         val meta = "${inbox.email} ${inbox.label} ${inbox.personName}".lowercase()
         if (KEYWORDS.any { meta.contains(it) }) return true
 
         // Check messages
-        val inboxEmail = inbox.email.lowercase().trim()
         return messages.any { m ->
-            (m.inboxEmail.lowercase().trim() == inboxEmail || m.to.lowercase().contains(inboxEmail)) && isAmazonMessage(m)
+            messageBelongsToInbox(m, inbox) && isAmazonMessage(m)
         }
     }
 }
@@ -204,9 +295,8 @@ object AmazonBannedDetector {
         if (inbox.banStatus == "confirmed" || inbox.isBanned) return false
         if (inbox.banStatus == "suspected") return true
 
-        val inboxEmail = inbox.email.lowercase().trim()
         return messages.any { m ->
-            (m.inboxEmail.lowercase().trim() == inboxEmail || m.to.lowercase().contains(inboxEmail)) && isBannedMessage(m)
+            messageBelongsToInbox(m, inbox) && isBannedMessage(m)
         }
     }
 
@@ -436,6 +526,7 @@ object MailJson {
             isRealGmail = isRealGmail,
             isDottedGmailAlias = isDotted,
             parentEmail = parent,
+            gmailAuthType = fields.optStringValue("gmailAuthType"),
         )
     }
 
@@ -451,15 +542,14 @@ object MailJson {
             }
         }
         val official = allList.filter { it.isOfficial }
-        val temp = allList.filter { !it.isOfficial }
         val amazon = allList.filter { it.isAmazon }
         val banned = allList.filter { it.isConfirmedBanned }
         val suspected = allList.filter { it.isSuspected }
 
         return InboxesPayload(
-            activeId = official.firstOrNull()?.id ?: temp.firstOrNull()?.id,
+            activeId = official.firstOrNull()?.id,
             official = official,
-            temp = temp,
+            temp = emptyList(),
             amazon = amazon,
             banned = banned,
             suspected = suspected,
@@ -473,6 +563,8 @@ object MailJson {
         val from = fields.optStringValue("from")
         val to = fields.optStringValue("to")
         val inboxEmail = fields.optStringValue("inboxEmail")
+        val exactRecipient = fields.optStringValue("exactRecipient")
+        val parentEmail = fields.optStringValue("parentEmail")
         val subject = fields.optStringValue("subject")
         val intro = fields.optStringValue("intro")
         val text = fields.optStringValue("text")
@@ -492,6 +584,8 @@ object MailJson {
             from = from,
             to = to,
             inboxEmail = inboxEmail,
+            exactRecipient = exactRecipient,
+            parentEmail = parentEmail,
             subject = subject,
             intro = intro,
             text = text,
@@ -499,6 +593,7 @@ object MailJson {
             otp = fields.optStringValue("otp"),
             isAmazon = isAmazon,
             isBanned = isBanned,
+            isWinning = fields.optBooleanValue("isWinning"),
             banReason = banReason,
             bodyStatus = fields.optStringValue("bodyStatus"),
             attachments = emptyList(),
@@ -521,7 +616,7 @@ object MailJson {
         return MessagesPayload(
             messages = msgList,
             officialCount = msgList.count { it.isOfficial },
-            tempCount = msgList.count { !it.isOfficial },
+            tempCount = 0,
             amazonCount = msgList.count { it.isAmazon },
             bannedCount = msgList.count { it.isBanned },
             suspectedCount = 0,
@@ -533,10 +628,80 @@ object MailJson {
         return InboxesPayload(
             activeId = root.stringOrNull("activeId"),
             official = root.optJSONArray("official").toObjects(::inbox),
-            temp = root.optJSONArray("temp").toObjects(::inbox),
+            temp = emptyList(),
             amazon = root.optJSONArray("amazon").toObjects(::inbox),
             banned = root.optJSONArray("banned").toObjects(::inbox),
             suspected = root.optJSONArray("suspected").toObjects(::inbox),
+            deletedAmazon = deletedAmazonItems(root.optJSONArray("deletedAmazon")),
+        )
+    }
+
+    fun gmailAccounts(raw: String): GmailAccountsPayload {
+        val root = JSONObject(raw)
+        return GmailAccountsPayload(
+            success = root.optBoolean("success"),
+            accounts = root.optJSONArray("accounts").toObjects { item ->
+                GmailAccount(
+                    email = item.optString("email").trim().lowercase(),
+                    authType = item.optString("authType", item.optString("auth_type")),
+                    personName = item.optString("personName", item.optString("person_name")),
+                    status = item.optString("status", "disconnected"),
+                    lastError = item.optString("lastError", item.optString("last_error")),
+                    lastSyncAt = item.optString("lastSyncAt", item.optString("last_sync_at")),
+                    connectedAt = item.optString("connectedAt", item.optString("connected_at")),
+                    syncedCount = item.optInt("syncedCount", item.optInt("synced_count")),
+                )
+            },
+        )
+    }
+
+    fun gmailAction(raw: String): GmailActionResult {
+        val root = JSONObject(raw)
+        return GmailActionResult(
+            success = root.optBoolean("success"),
+            email = root.optString("email").trim().lowercase(),
+            newCount = root.optInt("newCount"),
+            syncWarning = root.optString("syncWarning"),
+        )
+    }
+
+    fun oauthAuthUrl(raw: String): OAuthAuthUrl {
+        val root = JSONObject(raw)
+        return OAuthAuthUrl(
+            success = root.optBoolean("success"),
+            authUrl = root.optString("authUrl"),
+            redirectUri = root.optString("redirectUri"),
+        )
+    }
+
+    fun deletedAmazon(raw: String): List<DeletedAmazonAccount> {
+        val root = JSONObject(raw)
+        return deletedAmazonItems(root.optJSONArray("deleted"))
+    }
+
+    fun amazonMutation(raw: String): AmazonAccountMutation {
+        val root = JSONObject(raw)
+        return AmazonAccountMutation(
+            success = root.optBoolean("success"),
+            email = root.optString("email").trim().lowercase(),
+        )
+    }
+
+    fun batchDelete(raw: String): BatchDeleteResult {
+        val root = JSONObject(raw)
+        return BatchDeleteResult(
+            success = root.optBoolean("success"),
+            count = root.optInt("count"),
+        )
+    }
+
+    fun winningMessages(raw: String): WinningMessagesPayload {
+        val root = JSONObject(raw)
+        val parsed = root.optJSONArray("messages").toObjects(::message)
+        return WinningMessagesPayload(
+            success = root.optBoolean("success"),
+            count = root.optInt("count", parsed.size),
+            messages = parsed,
         )
     }
 
@@ -596,7 +761,8 @@ object MailJson {
         val email = item.optString("email")
         val label = item.optString("label")
         val personName = item.optString("personName")
-        val official = item.optBoolean("isOfficial") || item.optString("type") == "official" || email.endsWith("@batabitoo.com", true)
+        val official = item.optBoolean("isOfficial") || item.optString("type") == "official" ||
+            email.endsWith("@batabitoo.com", true) || email.endsWith("@gmail.com", true)
         val banStatus = item.optString("banStatus", if (item.optBoolean("isBanned")) "confirmed" else "none")
         val isConfirmedBanned = official && (banStatus == "confirmed" || item.optBoolean("isBanned"))
         val isSuspected = official && (banStatus == "suspected")
@@ -619,12 +785,13 @@ object MailJson {
             isBanned = isConfirmedBanned,
             banStatus = banStatus,
             banReason = banReason,
-            type = if (official) "official" else "temp",
+            type = "official",
             messageCount = item.optInt("messageCount"),
             createdAt = item.optString("createdAt"),
             isRealGmail = isRealGmail,
             isDottedGmailAlias = isDotted,
             parentEmail = parent,
+            gmailAuthType = item.optString("gmailAuthType"),
         )
     }
 
@@ -634,6 +801,8 @@ object MailJson {
         val from = SenderFormatter.format(rawFrom, subject)
         val to = address(item.opt("to"))
         val inboxEmail = item.optString("inboxEmail")
+        val exactRecipient = address(item.opt("exactRecipient"))
+        val parentEmail = address(item.opt("parentEmail"))
         val rawIntro = item.optString("intro")
         val intro = ContentSanitizer.decodeBase64Text(rawIntro)
         val rawText = item.optString("text")
@@ -654,6 +823,8 @@ object MailJson {
             from = from,
             to = to,
             inboxEmail = inboxEmail,
+            exactRecipient = exactRecipient,
+            parentEmail = parentEmail,
             subject = subject,
             intro = intro,
             text = text,
@@ -661,11 +832,24 @@ object MailJson {
             otp = item.stringOrNull("otp").orEmpty(),
             isAmazon = isAmazon,
             isBanned = isBanned,
+            isWinning = item.optBoolean("isWinning"),
             banReason = banReason,
             bodyStatus = item.optString("bodyStatus"),
-            attachments = item.optJSONArray("attachments").toObjects { MailAttachment(it.optString("id"), it.optString("filename", "مرفق"), it.optLong("size"), it.optBoolean("inline")) },
+            attachments = item.optJSONArray("attachments").toObjects {
+                MailAttachment(
+                    id = it.optString("id"),
+                    filename = it.optString("filename", "مرفق"),
+                    size = it.optLong("size"),
+                    inline = it.optBoolean("inline"),
+                    contentType = it.optString("contentType", "application/octet-stream"),
+                    cid = it.optString("cid"),
+                )
+            },
             createdAt = item.optString("createdAt"),
-            isOfficial = item.optBoolean("isOfficialDomain") || (if (inboxEmail.isNotBlank()) inboxEmail else to).endsWith("@batabitoo.com", true),
+            isOfficial = item.optBoolean("isOfficialDomain") ||
+                listOf(exactRecipient, inboxEmail, to).firstOrNull { it.isNotBlank() }.orEmpty().let {
+                    it.endsWith("@batabitoo.com", true) || it.endsWith("@gmail.com", true)
+                },
         )
     }
 
@@ -682,6 +866,21 @@ object MailJson {
     }
 
     private fun JSONObject.stringOrNull(key: String): String? = if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+    private fun deletedAmazonItems(items: JSONArray?): List<DeletedAmazonAccount> {
+        if (items == null) return emptyList()
+        return buildList {
+            for (index in 0 until items.length()) {
+                val value = items.opt(index)
+                val email = when (value) {
+                    is JSONObject -> value.optString("email")
+                    is String -> value
+                    else -> ""
+                }.trim().lowercase()
+                if (email.isNotBlank()) add(DeletedAmazonAccount(email))
+            }
+        }.distinctBy { it.email }
+    }
     private fun <T> JSONArray?.toObjects(transform: (JSONObject) -> T): List<T> {
         if (this == null) return emptyList()
         return buildList { for (index in 0 until length()) optJSONObject(index)?.let { add(transform(it)) } }

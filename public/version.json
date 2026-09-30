@@ -1,9 +1,9 @@
 {
-  "latestVersionCode": 10,
-  "latestVersionName": "1.4.0",
-  "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.4.0/Batabitoo-Mail-Center-1.4.0.apk",
-  "sha256": "",
-  "releaseNotes": "تحديث الأمان والأداء: دعم كامل لقاعدة بيانات SQLite محلية آمنة، حظر الصور الخارجية لحماية الخصوصية، وحماية التنزيلات عبر SHA-256.",
+  "latestVersionCode": 20,
+  "latestVersionName": "1.8.0",
+  "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.8.0/Batabitoo-Mail-Center-1.8.0.apk",
+  "sha256": "a32c425cb22abdbad109d1c5b62128306434305c43fdaaef87c80959f7e3dac8",
+  "releaseNotes": "إزالة البريد السريع المؤقت بالكامل والاعتماد الحصري على البريد الرسمي (@batabitoo.com و Gmail). إضافة تبويبات تصفية سريعة للشاشة الرئيسية (كل الرسمي، بطابيطو، Gmail). تحسينات شاملة للأداء والمظهر على الموبايل.",
   "mandatory": false,
-  "updatedAt": "2026-09-18T19:30:00.000Z"
+  "updatedAt": "2026-09-30T10:00:00.000Z"
 }

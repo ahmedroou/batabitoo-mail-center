@@ -1,44 +1,59 @@
 package com.batabitoo.mailcenter
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.batabitoo.mailcenter.data.AmazonBannedDetector
 import com.batabitoo.mailcenter.data.AmazonDetector
 import com.batabitoo.mailcenter.data.AppVersionInfo
+import com.batabitoo.mailcenter.data.ApiException
 import com.batabitoo.mailcenter.data.Counts
+import com.batabitoo.mailcenter.data.DeletedAmazonAccount
+import com.batabitoo.mailcenter.data.GmailAccount
 import com.batabitoo.mailcenter.data.Inbox
 import com.batabitoo.mailcenter.data.MailMessage
+import com.batabitoo.mailcenter.data.MailAttachment
 import com.batabitoo.mailcenter.data.MailRepository
 import com.batabitoo.mailcenter.data.RegistrationLog
 import com.batabitoo.mailcenter.data.StorageStats
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 enum class MainSection { INBOXES, AMAZON, MESSAGES, LOGS, SETTINGS }
 enum class InboxFilter { OFFICIAL, TEMP }
 enum class OfficialSubFilter { ALL, BATABITOO, GMAIL }
-enum class AmazonTab { ALL, SUSPECTED, BANNED, HEALTHY, MESSAGES }
+enum class AmazonTab { ALL, SUSPECTED, BANNED, HEALTHY, DELETED, MESSAGES, OTP, ORDERS }
 enum class AmazonDomainFilter { ALL, BATABITOO, GMAIL }
 enum class MessageFilter { CURRENT, OFFICIAL, TEMP }
+enum class LogsTab { CAMPAIGNS, WINNING }
 
 data class MailUiState(
     val section: MainSection = MainSection.INBOXES,
     val inboxFilter: InboxFilter = InboxFilter.OFFICIAL,
     val officialSubFilter: OfficialSubFilter = OfficialSubFilter.ALL,
     val amazonTab: AmazonTab = AmazonTab.ALL,
+    val logsTab: LogsTab = LogsTab.CAMPAIGNS,
     val amazonDomainFilter: AmazonDomainFilter = AmazonDomainFilter.ALL,
     val messageFilter: MessageFilter = MessageFilter.CURRENT,
     val counts: Counts = Counts(),
+    val dataLoaded: Boolean = false,
+    val dataError: String? = null,
     val officialInboxes: List<Inbox> = emptyList(),
     val tempInboxes: List<Inbox> = emptyList(),
     val amazonInboxes: List<Inbox> = emptyList(),
     val bannedInboxes: List<Inbox> = emptyList(),
     val suspectedInboxes: List<Inbox> = emptyList(),
+    val deletedAmazonAccounts: List<DeletedAmazonAccount> = emptyList(),
+    val gmailAccounts: List<GmailAccount> = emptyList(),
     val activeInbox: Inbox? = null,
     val currentMessages: List<MailMessage> = emptyList(),
     val officialMessages: List<MailMessage> = emptyList(),
@@ -46,6 +61,7 @@ data class MailUiState(
     val amazonMessages: List<MailMessage> = emptyList(),
     val bannedMessages: List<MailMessage> = emptyList(),
     val logs: List<RegistrationLog> = emptyList(),
+    val winningMessages: List<MailMessage> = emptyList(),
     val selectedMessage: MailMessage? = null,
     val messageLoading: Boolean = false,
     val messageError: String? = null,
@@ -69,8 +85,25 @@ data class MailUiState(
     val currentVersionCode: Int = 1,
     val storageStats: StorageStats? = null,
     val storageCleaning: Boolean = false,
+    val authRequired: Boolean = false,
+    val authBusy: Boolean = false,
+    val gmailConnecting: Boolean = false,
+    val gmailBusyEmail: String? = null,
+    val selectedInboxIds: Set<String> = emptySet(),
+    val deletingInboxes: Boolean = false,
 )
 
+private data class CloudSnapshot(
+    val status: com.batabitoo.mailcenter.data.SystemStatus,
+    val inboxes: com.batabitoo.mailcenter.data.InboxesPayload,
+    val messages: com.batabitoo.mailcenter.data.MessagesPayload,
+    val logs: List<RegistrationLog>,
+    val gmailAccounts: List<GmailAccount>,
+    val deletedAmazon: List<DeletedAmazonAccount>,
+    val winningMessages: List<MailMessage>,
+)
+
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 class MailViewModel(application: Application) : AndroidViewModel(application) {
     private var messageRequest = 0
     private val repository = MailRepository(application)
@@ -96,23 +129,44 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
 
         refreshAll(initial = true)
         viewModelScope.launch {
-            while (true) {
-                delay(8_000)
-                if (_uiState.value.autoRefresh && !_uiState.value.refreshing) refreshCurrent(silent = true)
+            repository.events().debounce(650).collect { event ->
+                if (!_uiState.value.autoRefresh || _uiState.value.refreshing) return@collect
+                when (event) {
+                    "status:counts" -> refreshStatusOnly()
+                    "message:new", "inbox:new", "inbox:updated", "inbox:deleted" -> refreshCloudData()
+                }
             }
         }
     }
 
-    fun refreshAll(initial: Boolean = false) {
+    fun refreshAll(initial: Boolean = false, silent: Boolean = false) {
         viewModelScope.launch {
             _uiState.update { it.copy(loading = initial, refreshing = !initial, error = null) }
             runCatching {
-                val status = repository.status(currentVersionCode)
+                repository.ensurePersonalAccess()
+                val snapshot = coroutineScope {
+                    val statusRequest = async { repository.status(currentVersionCode) }
+                    val inboxesRequest = async { repository.inboxes() }
+                    val messagesRequest = async { repository.messages() }
+                    val logsRequest = async { runCatching { repository.logs() }.getOrDefault(_uiState.value.logs) }
+                    val gmailRequest = async { runCatching { repository.gmailAccounts() }.getOrDefault(emptyList()) }
+                    val deletedAmazonRequest = async { runCatching { repository.deletedAmazonAccounts() }.getOrDefault(emptyList()) }
+                    val winningRequest = async { runCatching { repository.winningMessages().messages }.getOrDefault(emptyList()) }
+                    CloudSnapshot(
+                        statusRequest.await(),
+                        inboxesRequest.await(),
+                        messagesRequest.await(),
+                        logsRequest.await(),
+                        gmailRequest.await(),
+                        deletedAmazonRequest.await(),
+                        winningRequest.await(),
+                    )
+                }
+                val status = snapshot.status
+                val inboxes = snapshot.inboxes
+                val allMessages = snapshot.messages
+                val logs = snapshot.logs
                 val appVersion = status.appVersion ?: runCatching { repository.appVersion(currentVersionCode) }.getOrNull()
-                val inboxes = repository.inboxes()
-                val current = repository.current()
-                val allMessages = repository.messages()
-                val logs = repository.logs()
 
                 val officialEmails = inboxes.official.map { it.email.lowercase().trim() }.toSet()
 
@@ -156,28 +210,55 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                         banReason = reason,
                     )
                 }
-                val tempList = inboxes.temp.map { inbox ->
-                    inbox.copy(isAmazon = false, isBanned = false, banStatus = "none")
+                val officialByKey = officialList.associateBy(::inboxKey)
+                fun authoritative(source: List<Inbox>, fallback: (Inbox) -> Boolean): List<Inbox> {
+                    if (source.isEmpty()) return officialList.filter(fallback)
+                    return source.map { cloud -> officialByKey[inboxKey(cloud)]?.let { mergeInbox(it, cloud) } ?: cloud }
+                        .distinctBy(::inboxKey)
                 }
-                val amazonInboxList = officialList.filter { it.isAmazon }
-                val bannedInboxList = officialList.filter { it.isConfirmedBanned }
-                val suspectedInboxList = officialList.filter { it.isSuspected }
+                val excludedAmazonEmails = (inboxes.deletedAmazon + snapshot.deletedAmazon).map { it.email.trim().lowercase() }.toSet()
+                val aliasInboxes = officialList.filter { it.isAmazonOnlyAlias && it.email.trim().lowercase() !in excludedAmazonEmails }
+                    .map { it.copy(isAmazon = true) }
+                val amazonInboxList = (authoritative(inboxes.amazon) { it.isAmazon } + aliasInboxes)
+                    .distinctBy { it.email.trim().lowercase() }
+                val homeOfficial = officialList.filterNot { it.isAmazonOnlyAlias }
+                val bannedInboxList = authoritative(inboxes.banned) { it.isConfirmedBanned }
+                    .map { it.copy(banStatus = "confirmed", isBanned = true, isAmazon = true) }
+                val suspectedInboxList = authoritative(inboxes.suspected) { it.isSuspected }
+                    .filterNot { candidate -> bannedInboxList.any { inboxKey(it) == inboxKey(candidate) } }
+                    .map { it.copy(banStatus = "suspected", isBanned = false, isAmazon = true) }
+
+                val active = officialList.firstOrNull { it.id == inboxes.activeId }
+                    ?: _uiState.value.activeInbox?.let { previous ->
+                        officialList.firstOrNull { inboxKey(it) == inboxKey(previous) }
+                    }
+                    ?: officialList.firstOrNull()
+                val activeMessages = active?.let { inbox -> allMsgsList.filter { messageBelongsToInbox(it, inbox) } }.orEmpty()
 
                 _uiState.update {
                     it.copy(
+                        dataLoaded = true,
+                        dataError = null,
+                        authRequired = false,
                         counts = status.counts.copy(
+                            official = homeOfficial.size,
+                            temp = 0,
                             messages = allMsgsList.size,
                             amazon = amazonInboxList.size,
                             banned = bannedInboxList.size,
                             suspected = suspectedInboxList.size,
                         ),
-                        officialInboxes = officialList,
-                        tempInboxes = tempList,
+                        officialInboxes = homeOfficial,
+                        tempInboxes = emptyList(),
+                        selectedInboxIds = it.selectedInboxIds.intersect(homeOfficial.map { inbox -> inbox.id }.toSet()),
                         amazonInboxes = amazonInboxList,
                         bannedInboxes = bannedInboxList,
                         suspectedInboxes = suspectedInboxList,
+                        deletedAmazonAccounts = (inboxes.deletedAmazon + snapshot.deletedAmazon)
+                            .distinctBy { deleted -> deleted.email.lowercase().trim() },
+                        gmailAccounts = snapshot.gmailAccounts,
                         appUpdate = appVersion,
-                        activeInbox = current.inbox?.let { active ->
+                        activeInbox = active?.let { active ->
                             val isConfirmedBanned = AmazonBannedDetector.isConfirmedBanned(active)
                             val isSuspected = AmazonBannedDetector.isSuspectedInbox(active, allMsgsList)
                             val isAmazon = isConfirmedBanned || isSuspected || AmazonDetector.isAmazonInbox(active, allMsgsList)
@@ -190,31 +271,285 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                             val reason = if (active.banReason.isNotBlank()) active.banReason else if (isConfirmedBanned || isSuspected) "حساب مقيد / محظور" else ""
                             active.copy(isAmazon = isAmazon, isBanned = isConfirmedBanned, banStatus = banStatus, banReason = reason)
                         },
-                        currentMessages = current.messages.map { msg ->
-                            val isBanned = AmazonBannedDetector.isBannedMessage(msg)
-                            val isAmazon = isBanned || AmazonDetector.isAmazonMessage(msg)
-                            val reason = if (isBanned) AmazonBannedDetector.getBanReason(msg) else ""
-                            msg.copy(isAmazon = isAmazon, isBanned = isBanned, banReason = reason)
-                        },
+                        currentMessages = activeMessages,
                         officialMessages = officialMessages,
-                        tempMessages = tempMessages,
+                        tempMessages = emptyList(),
                         amazonMessages = amazonMsgs,
                         bannedMessages = bannedMsgs,
                         logs = logs,
+                        winningMessages = snapshot.winningMessages,
                         online = status.online,
                         cloudConnected = status.cloudConnected,
                         projectId = status.projectId,
                         loading = false,
                         refreshing = false,
-                        notice = if (initial) null else "تم تحديث جميع البيانات",
+                        notice = if (initial || silent) null else "تم تحديث جميع البيانات",
                     )
                 }
             }.onFailure { showError(it, initial) }
         }
     }
 
+    fun connectionUrl(): String = repository.connectionUrl()
+
+    fun finishConnection(code: String) {
+        viewModelScope.launch {
+            runCatching { repository.finishConnection(code) }
+                .onSuccess { refreshAll() }
+                .onFailure { showError(it) }
+        }
+    }
+
+    private fun refreshCloudData() {
+        // SSE bursts are debounced above; this refresh keeps every cloud-derived
+        // classification consistent without reviving the old local cache.
+        refreshAll(silent = true)
+    }
+
+    private fun refreshStatusOnly() {
+        viewModelScope.launch {
+            runCatching { repository.status(currentVersionCode) }
+                .onSuccess { status ->
+                    _uiState.update {
+                        it.copy(
+                            counts = if (it.dataLoaded) status.counts.copy(official = it.officialInboxes.size, temp = it.tempInboxes.size) else status.counts,
+                            online = status.online,
+                            cloudConnected = status.cloudConnected,
+                            projectId = status.projectId,
+                            appUpdate = status.appVersion ?: it.appUpdate,
+                        )
+                    }
+                }
+        }
+    }
+
+    private fun inboxKey(inbox: Inbox): String = inbox.id.ifBlank { inbox.email.lowercase().trim() }
+
+    private fun mergeInbox(local: Inbox, cloud: Inbox): Inbox = local.copy(
+        id = cloud.id.ifBlank { local.id },
+        email = cloud.email.ifBlank { local.email },
+        label = cloud.label.ifBlank { local.label },
+        personName = cloud.personName.ifBlank { local.personName },
+        messageCount = maxOf(local.messageCount, cloud.messageCount),
+        isAmazon = cloud.isAmazon || cloud.isBanned || cloud.banStatus == "suspected" || local.isAmazon,
+        isBanned = cloud.isBanned || cloud.banStatus == "confirmed",
+        banStatus = cloud.banStatus.ifBlank { local.banStatus },
+        banReason = cloud.banReason.ifBlank { local.banReason },
+        isDottedGmailAlias = local.isDottedGmailAlias || cloud.isDottedGmailAlias,
+        parentEmail = cloud.parentEmail.ifBlank { local.parentEmail },
+    )
+
+    private fun messageBelongsToInbox(message: MailMessage, inbox: Inbox): Boolean {
+        val email = inbox.email.trim().lowercase()
+        if (email.isBlank()) return false
+        val exactRecipient = message.exactRecipient.ifBlank { message.inboxEmail }.trim().lowercase()
+        val to = message.to.lowercase()
+        val parent = message.parentEmail.trim().lowercase()
+        return if (inbox.isDottedGmailAlias) {
+            exactRecipient == email || to.contains(email)
+        } else {
+            exactRecipient == email || to.contains(email) || parent == email
+        }
+    }
+
     fun setUpdateDialogVisible(visible: Boolean) {
         _uiState.update { it.copy(showUpdateDialog = visible) }
+    }
+
+    fun login(pin: String) {
+        if (pin.length < 4) {
+            _uiState.update { it.copy(error = "أدخل رمز الأمان المكوّن من 4 أرقام") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(authBusy = true, error = null) }
+            runCatching { repository.login(pin) }
+                .onSuccess { accepted ->
+                    if (accepted) {
+                        _uiState.update { it.copy(authRequired = false, authBusy = false, notice = "تم فتح مركز البريد") }
+                        refreshAll(initial = true)
+                    } else {
+                        _uiState.update { it.copy(authBusy = false, authRequired = true, error = "رمز الأمان غير صحيح") }
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(authBusy = false, authRequired = true, error = error.message ?: "تعذر تسجيل الدخول") }
+                }
+        }
+    }
+
+    fun logout() {
+        viewModelScope.launch {
+            runCatching { repository.logout() }
+            _uiState.update { MailUiState(baseUrl = repository.baseUrl, authRequired = true, loading = false) }
+        }
+    }
+
+    fun startGmailOAuth() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(gmailConnecting = true, error = null) }
+            runCatching { repository.gmailOAuthAuthUrl() }
+                .onSuccess { result ->
+                    if (result.authUrl.isBlank()) {
+                        _uiState.update { it.copy(gmailConnecting = false, error = "لم يُرجع الخادم رابط ربط Google") }
+                        return@onSuccess
+                    }
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(result.authUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    getApplication<Application>().startActivity(intent)
+                    _uiState.update {
+                        it.copy(
+                            gmailConnecting = false,
+                            notice = "أكمل تسجيل الدخول في Google ثم ارجع إلى التطبيق",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(gmailConnecting = false, error = error.message ?: "تعذر بدء ربط Gmail") }
+                }
+        }
+    }
+
+    fun refreshGmailAccounts(silent: Boolean = true) {
+        viewModelScope.launch {
+            runCatching { repository.gmailAccounts() }
+                .onSuccess { accounts ->
+                    _uiState.update {
+                        it.copy(
+                            gmailAccounts = accounts,
+                            notice = if (silent) it.notice else "تم تحديث حالة حسابات Gmail",
+                        )
+                    }
+                }
+                .onFailure { error -> if (!silent) _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun syncGmail(email: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(gmailBusyEmail = email, error = null) }
+            runCatching { repository.syncGmail(email) }
+                .onSuccess { result ->
+                    _uiState.update {
+                        it.copy(
+                            gmailBusyEmail = null,
+                            notice = if (result.newCount > 0) "وصلت ${result.newCount} رسالة جديدة من Gmail" else "Gmail متزامن ولا توجد رسائل جديدة",
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { error ->
+                    val needsReconnect = error.message.orEmpty().contains("ربط") || error.message.orEmpty().contains("صلاحية")
+                    _uiState.update {
+                        it.copy(
+                            gmailBusyEmail = null,
+                            error = if (needsReconnect) "انتهت صلاحية Gmail؛ أعد ربط الحساب من Google" else (error.message ?: "تعذرت مزامنة Gmail"),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun disconnectGmail(email: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(gmailBusyEmail = email, error = null) }
+            runCatching { repository.disconnectGmail(email) }
+                .onSuccess {
+                    _uiState.update { it.copy(gmailBusyEmail = null, notice = "تم فصل $email") }
+                    refreshAll(silent = true)
+                }
+                .onFailure { error -> _uiState.update { it.copy(gmailBusyEmail = null, error = error.message) } }
+        }
+    }
+
+    fun deleteAmazonAccount(inbox: Inbox) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null) }
+            runCatching { repository.deleteAmazonAccount(inbox.email) }
+                .onSuccess {
+                    _uiState.update { it.copy(refreshing = false, notice = "تم استبعاد ${inbox.email} ويمكن استعادته لاحقاً") }
+                    refreshAll(silent = true)
+                }
+                .onFailure { error -> showError(error) }
+        }
+    }
+
+    fun restoreAmazonAccount(account: DeletedAmazonAccount) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null) }
+            runCatching { repository.restoreAmazonAccount(account.email) }
+                .onSuccess {
+                    _uiState.update { it.copy(refreshing = false, notice = "تمت استعادة ${account.email}") }
+                    refreshAll(silent = true)
+                }
+                .onFailure { error -> showError(error) }
+        }
+    }
+
+    fun toggleInboxSelection(id: String) {
+        _uiState.update { state ->
+            val selected = state.selectedInboxIds.toMutableSet()
+            if (!selected.add(id)) selected.remove(id)
+            state.copy(selectedInboxIds = selected)
+        }
+    }
+
+    fun clearInboxSelection() = _uiState.update { it.copy(selectedInboxIds = emptySet()) }
+
+    fun selectInboxes(ids: Set<String>) = _uiState.update { state ->
+        val allowed = state.officialInboxes.filterNot { it.isAmazonOnlyAlias }.map { it.id }.toSet()
+        state.copy(selectedInboxIds = ids.intersect(allowed))
+    }
+
+    fun deleteSelectedInboxes(ids: Set<String> = _uiState.value.selectedInboxIds) {
+        if (ids.isEmpty() || _uiState.value.deletingInboxes) return
+        _uiState.update { it.copy(deletingInboxes = true) }
+        viewModelScope.launch {
+            _uiState.update { it.copy(refreshing = true, error = null) }
+            runCatching { repository.batchDeleteInboxes(ids).also { check(it.success) { "تعذر حذف الصناديق المحددة. حاول مجددًا." } } }
+                .onSuccess { result ->
+                    _uiState.update { it.copy(refreshing = false, deletingInboxes = false, selectedInboxIds = it.selectedInboxIds - ids, notice = "تم حذف ${result.count} صندوق") }
+                    refreshAll(silent = true)
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(deletingInboxes = false) }
+                    showError(error)
+                }
+        }
+    }
+
+    fun navigateMessage(offset: Int) {
+        val state = _uiState.value
+        val selected = state.selectedMessage ?: return
+        val source = when {
+            state.section == MainSection.AMAZON -> state.amazonMessages
+            state.messageFilter == MessageFilter.OFFICIAL -> state.officialMessages
+            else -> state.currentMessages
+        }
+        if (source.isEmpty()) return
+        val index = source.indexOfFirst { it.id == selected.id }
+        if (index < 0) return
+        val target = source.getOrNull(index + offset) ?: return
+        openMessage(target)
+    }
+
+    fun openAttachment(message: MailMessage, attachment: MailAttachment) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(messageLoading = true, messageError = null) }
+            runCatching { repository.downloadAttachment(message.id, attachment) }
+                .onSuccess { downloaded ->
+                    val intent = Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(downloaded.uri, downloaded.contentType)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                    runCatching { getApplication<Application>().startActivity(intent) }
+                        .onFailure {
+                            _uiState.update { state -> state.copy(messageError = "تم تنزيل المرفق لكن لا يوجد تطبيق مناسب لفتحه") }
+                        }
+                    _uiState.update { it.copy(messageLoading = false) }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(messageLoading = false, messageError = error.message ?: "تعذر تنزيل المرفق") }
+                }
+        }
     }
 
     fun checkForUpdates() {
@@ -244,10 +579,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                 if (selectedInbox == null) {
                     repository.current()
                 } else {
-                    val messages = repository.messages().messages.filter { message ->
-                        message.inboxEmail.equals(selectedInbox.email, ignoreCase = true) ||
-                            message.to.contains(selectedInbox.email, ignoreCase = true)
-                    }
+                    val messages = repository.messages().messages.filter { messageBelongsToInbox(it, selectedInbox) }
                     com.batabitoo.mailcenter.data.CurrentPayload(selectedInbox, messages)
                 }
             }
@@ -283,10 +615,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
                 // Edge selection persistence is best-effort. Navigation must
                 // still work when the public Gmail endpoint is unavailable.
                 runCatching { repository.selectInbox(inbox.id) }
-                val messages = repository.messages().messages.filter { message ->
-                    message.inboxEmail.equals(inbox.email, ignoreCase = true) ||
-                        message.to.contains(inbox.email, ignoreCase = true)
-                }
+                val messages = repository.messages().messages.filter { messageBelongsToInbox(it, inbox) }
                 com.batabitoo.mailcenter.data.CurrentPayload(inbox, messages)
             }.onSuccess { payload ->
                 _uiState.update {
@@ -305,7 +634,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getNextSequentialPrefix(base: String = "ahmedroou"): String {
         val cleanBase = base.trim().lowercase()
-        val allEmails = (_uiState.value.officialInboxes + _uiState.value.tempInboxes).map { it.email.lowercase().trim() }
+        val allEmails = _uiState.value.officialInboxes.map { it.email.lowercase().trim() }
         val regex = Regex("""^${Regex.escape(cleanBase)}(\d+)@batabitoo\.com$""")
         var maxNum = 0
         for (email in allEmails) {
@@ -416,7 +745,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setSection(value: MainSection) {
-        _uiState.update { it.copy(section = value, search = "") }
+        _uiState.update { it.copy(section = value, search = "", selectedInboxIds = emptySet()) }
         if (value == MainSection.SETTINGS) loadStorageStats()
     }
 
@@ -452,12 +781,13 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setInboxFilter(value: InboxFilter) = _uiState.update { it.copy(inboxFilter = value, search = "") }
-    fun setOfficialSubFilter(value: OfficialSubFilter) = _uiState.update { it.copy(officialSubFilter = value, search = "") }
+    fun setInboxFilter(value: InboxFilter) = _uiState.update { it.copy(inboxFilter = value, search = "", selectedInboxIds = emptySet()) }
+    fun setOfficialSubFilter(value: OfficialSubFilter) = _uiState.update { it.copy(officialSubFilter = value, search = "", selectedInboxIds = emptySet()) }
     fun setAmazonTab(value: AmazonTab) = _uiState.update { it.copy(amazonTab = value, search = "") }
+    fun setLogsTab(value: LogsTab) = _uiState.update { it.copy(logsTab = value, search = "") }
     fun setAmazonDomainFilter(value: AmazonDomainFilter) = _uiState.update { it.copy(amazonDomainFilter = value, search = "") }
     fun setMessageFilter(value: MessageFilter) = _uiState.update { it.copy(messageFilter = value, search = "") }
-    fun setSearch(value: String) = _uiState.update { it.copy(search = value) }
+    fun setSearch(value: String) = _uiState.update { it.copy(search = value, selectedInboxIds = emptySet()) }
     fun setCreateVisible(value: Boolean) = _uiState.update { it.copy(showCreate = value) }
     fun setShowDottedDialog(value: Boolean) = _uiState.update { it.copy(showDottedDialog = value) }
     fun setCreateType(official: Boolean, domain: String = "batabitoo.com") = _uiState.update { it.copy(createOfficial = official, createDomain = domain) }
@@ -496,13 +826,18 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun showError(error: Throwable, initial: Boolean = false) {
+        val authFailure = (error as? ApiException)?.statusCode == 401 || error.message.orEmpty().let { message ->
+            message.contains("401") || message.contains("Unauthorized", ignoreCase = true) || message.contains("جلسة", ignoreCase = true) || message.contains("الوصول مقفل")
+        }
         _uiState.update {
             it.copy(
                 loading = false,
                 refreshing = false,
                 online = false,
                 error = error.message ?: "تعذر الاتصال بالخادم",
+                dataError = if (authFailure) "تعذر تجديد الاتصال الشخصي. بياناتك محفوظة في السحابة وليست فارغة." else error.message ?: "تعذر الاتصال بالخادم",
                 notice = null,
+                authRequired = it.authRequired || authFailure,
             )
         }
     }

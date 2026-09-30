@@ -78,18 +78,6 @@ export default function Home() {
   };
 
   const checkPin = async (pinToCheck) => {
-    const EXPECTED_HASH = 'fdd786c4bb54810ca1e7edf1538dec73a46a7682f141a8bc5278b4fb0ec76360';
-
-    const hashPin = async (pin) => {
-      try {
-        const enc = new TextEncoder().encode(String(pin || '').trim());
-        const buf = await crypto.subtle.digest('SHA-256', enc);
-        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-      } catch (_) {
-        return '';
-      }
-    };
-
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -113,18 +101,7 @@ export default function Home() {
         setEnteredPin('');
         return;
       }
-    } catch (_) {}
-
-    const hashed = await hashPin(pinToCheck);
-    if (hashed && hashed === EXPECTED_HASH) {
-      const localToken = 'local_' + Date.now();
-      localStorage.setItem(TOKEN_KEY, localToken);
-      sessionStorage.setItem(TOKEN_KEY, localToken);
-      document.documentElement.classList.add('pin-pre-unlocked');
-      setIsUnlocked(true);
-      setEnteredPin('');
-      loadData(localToken);
-    } else {
+    } catch (_) {
       setPinError(true);
       setEnteredPin('');
     }

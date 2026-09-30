@@ -191,39 +191,48 @@ body[data-screen="amazon"] .amazon-hub-shell { gap:18px; }
 #amazon-results-count { padding:7px 11px;border-radius:10px;background:#f5f6fa;color:#687386;white-space:nowrap; }
 
 .amazon-account-grid {
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;gap:12px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));align-items:stretch;gap:10px;
   overflow:visible;padding:0;border:0;
 }
 .amazon-account-card {
-  position:relative;display:flex;flex-direction:column;gap:13px;min-width:0;padding:17px;
-  border:1px solid #e7eaf0;border-radius:20px;background:linear-gradient(155deg,#fff,#fbfcff);
-  box-shadow:0 6px 18px rgba(30,41,59,.035);content-visibility:auto;contain-intrinsic-size:230px;
+  position:relative;display:flex;flex-direction:column;gap:10px;min-width:0;padding:12px;
+  border:1px solid #e7eaf0;border-radius:16px;background:linear-gradient(155deg,#fff,#fbfcff);
+  box-shadow:0 4px 12px rgba(30,41,59,.035);content-visibility:auto;contain-intrinsic-size:180px;
   transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;
 }
-.amazon-account-card::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;border-radius:20px 0 0 20px;background:#37b77e;opacity:.75; }
+.amazon-account-card::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;border-radius:16px 0 0 16px;background:#37b77e;opacity:.75; }
 .amazon-account-card.suspected::before { background:#f2ac18; }
 .amazon-account-card.banned::before { background:#e75058; }
-.amazon-account-card:hover { transform:translateY(-3px);border-color:#d8dce5;box-shadow:0 16px 32px rgba(30,41,59,.08); }
-.amazon-account-card header { display:flex;align-items:center;gap:10px; }
+.amazon-account-card:hover { transform:translateY(-2px);border-color:#d8dce5;box-shadow:0 12px 24px rgba(30,41,59,.08); }
+.amazon-account-card header { display:flex;align-items:center;gap:8px; }
 .amazon-account-card header > div:nth-child(2) { min-width:0;flex:1; }
-.amazon-account-card h4 { margin:0;color:#17202e;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
-.amazon-account-avatar { flex:0 0 42px;width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:#e9f8f1;color:#159162;font:900 24px/1 Arial; }
+.amazon-account-card h4 { margin:0;color:#17202e;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.amazon-account-avatar { flex:0 0 34px;width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:#e9f8f1;color:#159162;font:900 18px/1 Arial; }
 .amazon-account-card.suspected .amazon-account-avatar { color:#b87800;background:#fff5dc; }
 .amazon-account-card.banned .amazon-account-avatar { color:#cc3542;background:#ffeaec; }
-.amazon-account-status { display:inline-flex;align-items:center;gap:5px;margin-top:3px;color:#159162;font-size:10px;font-weight:800; }
-.amazon-account-status::before { content:"";width:6px;height:6px;border-radius:50%;background:currentColor; }
+.amazon-account-status { display:inline-flex;align-items:center;gap:4px;margin-top:2px;color:#159162;font-size:9px;font-weight:800; }
+.amazon-account-status::before { content:"";width:5px;height:5px;border-radius:50%;background:currentColor; }
 .suspected .amazon-account-status { color:#b87800; }
 .banned .amazon-account-status { color:#cc3542; }
-.amazon-account-count { flex:0 0 auto;padding:5px 8px;border-radius:9px;background:#f2f4f8;color:#768094;font-size:9px; }
-.amazon-account-email { display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:42px;padding:8px 11px;border:0;border-radius:12px;background:#f5f7fb;color:#333d4d;text-align:left;cursor:pointer; }
-.amazon-account-email span { min-width:0;overflow-wrap:anywhere;font:600 11px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; }
-.amazon-account-email svg { flex:0 0 16px;width:16px;fill:none;stroke:#8a94a6;stroke-width:1.8; }
+.amazon-account-count { flex:0 0 auto;padding:4px 6px;border-radius:8px;background:#f2f4f8;color:#768094;font-size:9px; }
+.amazon-account-email { display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:#f5f7fb;color:#333d4d;text-align:left;cursor:pointer; }
+.amazon-account-email span { min-width:0;overflow-wrap:anywhere;font:600 10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.amazon-account-email svg { flex:0 0 14px;width:14px;fill:none;stroke:#8a94a6;stroke-width:1.8; }
 .amazon-account-email:hover { background:#fff4e5;color:#b86500; }
-.amazon-account-reason { margin:0;padding:9px 11px;border-radius:11px;background:#fff1f2;color:#a82e39;font-size:10px;line-height:1.7; }
-.amazon-account-card footer { display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:3px; }
-.amazon-account-card footer button { min-height:36px;padding:0 11px;border:0;border-radius:11px;background:#182334;color:white;font-size:10px;font-weight:800;cursor:pointer; }
+.amazon-account-reason { margin:0;padding:8px 10px;border-radius:9px;background:#fff1f2;color:#a82e39;font-size:9px;line-height:1.6; }
+.amazon-account-card footer { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:2px; }
+.amazon-account-card footer button { min-height:30px;padding:0 9px;border:0;border-radius:9px;background:#182334;color:white;font-size:9px;font-weight:800;cursor:pointer; }
 .amazon-account-card footer button:hover { background:#ff9900;color:#17202e;transform:translateX(-2px); }
 .amazon-account-card footer time { color:#9aa3b2;font-size:9px; }
+.amazon-card-del-btn { flex:0 0 28px;width:28px;height:28px;min-height:28px !important;padding:0 !important;display:inline-grid;place-items:center;border-radius:8px !important;background:transparent !important;border:1px solid #e2e8f0 !important;color:#94a3b8 !important;cursor:pointer;transition:all .15s ease; }
+.amazon-card-del-btn:hover { background:#fee2e2 !important;border-color:#fca5a5 !important;color:#dc2626 !important;transform:scale(1.05) !important; }
+.amazon-card-del-btn svg { width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2; }
+.amazon-account-card.is-deleted-variant { border:1px dashed #cbd5e1;background:#f8fafc;opacity:.92; }
+.amazon-account-card.is-deleted-variant::before { background:#94a3b8; }
+.btn-restore-amazon { min-height:28px !important;padding:0 12px !important;border-radius:8px !important;background:#059669 !important;color:#ffffff !important;font-weight:700 !important;font-size:11px !important;border:none !important;cursor:pointer;transition:background .15s ease; }
+.btn-restore-amazon:hover { background:#047857 !important; }
+.amazon-sub-tabs button.deleted-tab-pill { color:#64748b; }
+.amazon-sub-tabs button.deleted-tab-pill.active { background:#ef4444 !important;color:#ffffff !important; }
 .amazon-review-actions { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:10px;border-radius:13px;background:#fff8e8;border:1px solid #f7dfaa; }
 .amazon-review-actions span { grid-column:1/-1;color:#885b00;font-size:10px;font-weight:800; }
 .amazon-review-actions button { min-height:31px;padding:4px;border:0;border-radius:9px;font-size:9px;font-weight:800;cursor:pointer;background:white;color:#735a21;box-shadow:inset 0 0 0 1px #efdcad; }

@@ -6,13 +6,12 @@
 
 ## 📌 1. الهيكلية العامة للنظام (Architecture Overview)
 
-يعتمد تطبيق الأندرويد على قاعدة البيانات السحابية (Firebase Cloud Firestore) والخادم المحلي لمعرفة أحدث إصدار متوفر للتطبيق:
+يعتمد تطبيق الأندرويد على Firebase Cloud Firestore وحده كمصدر دائم لمعرفة أحدث إصدار متوفر للتطبيق:
 
 ```mermaid
 graph TD
     A[تطبيق الأندرويد Android App] -->|GET /api/status أو /api/app/version| B[خادم البريد Express / HTTP Server]
-    B -->|Firestore Sync| C[(Firebase Firestore: app_config/version)]
-    B -->|Local Fallback| D[(الملف المحلي: inboxes_db.json)]
+    B -->|قراءة وكتابة مباشرة| C[(Firebase Firestore: mailRuntime/bootstrap.appVersion)]
     C -->|يرجع بيانات الإصدار| B
     B -->|AppVersionInfo| A
     A -->|مقارنة الإصدار: latestVersionCode > currentVersionCode| E{هل يوجد تحديث؟}
@@ -24,13 +23,7 @@ graph TD
 
 ## 🗄️ 2. هيكل بيانات الإصدار (Database Schema)
 
-تُخزن بيانات الإصدار في:
-1. **Firebase Cloud Firestore**:
-   - المجموعة: `app_config`
-   - الوثيقة: `version`
-2. **التخزين المحلي**:
-   - الملف: `inboxes_db.json`
-   - الحقل: `appVersion`
+تُخزن بيانات الإصدار حصراً في وثيقة `mailRuntime/bootstrap` داخل الحقل `appVersion`. لا يوجد ملف أو قاعدة بيانات محلية بديلة. تبقى قراءة `mailConfig/settings` في أداة الترحيل القديمة فقط لاستيراد البيانات مرة واحدة عند الحاجة.
 
 ### نموذج البيانات (JSON):
 ```json
@@ -103,7 +96,7 @@ Content-Type: application/json
   "mandatory": false
 }
 ```
-*ملاحظة:* الخادم سيقوم فوراً بتحديث الملف المحلي ومزامنته مع Cloud Firestore.
+*ملاحظة:* الخادم يكتب التحديث مباشرة إلى Cloud Firestore، وهو المرجع الوحيد.
 
 #### الطريقة المعتمدة لرفع الـ APK واستضافته مجاناً عبر GitHub Releases:
 بدلاً من استهلاك كوتة Firebase أو مساحة الخادم، يتم رفع حزم الـ APK مجاناً إلى مستودع الإصدارات العام `ahmedroou/batabitoo-releases` عبر GitHub CLI:
@@ -139,5 +132,5 @@ await db.updateAppVersion({
 
 ## 💡 5. إرشادات سريعة للوكلاء (Tips for AI Agents)
 - **فحص الإصدار الحالي**: استعرض `android/app/build.gradle.kts` لمعرفة `versionCode` الحالي.
-- **تجنب تضارب التخزين**: وظيفة `db.updateAppVersion()` تتولى كتابة البيانات محلياً وإرسالها إلى Firestore تلقائياً مع معالجة الأخطاء.
+- **تجنب تضارب التخزين**: وظيفة `db.updateAppVersion()` تكتب إلى Firestore فقط؛ لا تضف ملفاً محلياً بديلاً.
 - **الاختبار**: يوجد اختبار وحدة مخصص `MailJsonTest.kt` للتحقق من فحص التحديثات بدقة 100%.

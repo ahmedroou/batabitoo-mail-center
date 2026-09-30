@@ -3,14 +3,53 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
+  "functions": {
+    "source": ".",
+    "runtime": "nodejs22",
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".next",
+      ".firebase",
+      ".agents",
+      "android",
+      "downloads",
+      "scananddraw_extension",
+      "scratch",
+      "private",
+      "data",
+      "mail_content",
+      "test",
+      "scripts",
+      "public",
+      "node_modules/**",
+      "public/**",
+      ".next/**",
+      ".git/**",
+      ".firebase/**",
+      "android/**",
+      "downloads/**",
+      "scananddraw_extension/**",
+      "scratch/**",
+      "private/**",
+      "data/**",
+      "mail_content/**",
+      "test/**",
+      "scripts/**",
+      "serviceAccountKey.json",
+      "inboxes_db.json",
+      "**/*.apk",
+      "**/*.png",
+      "**/*.exe",
+      "**/*.log"
+    ]
+  },
   "hosting": {
     "public": "public",
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**",
-      "**/*.apk",
-      "downloads/**"
+      "**/node_modules/**"
     ],
     "headers": [
       {
@@ -24,6 +63,13 @@
       }
     ],
     "rewrites": [
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "api",
+          "region": "europe-west1"
+        }
+      },
       {
         "source": "**",
         "destination": "/index.html"

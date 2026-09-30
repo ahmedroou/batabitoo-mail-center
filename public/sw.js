@@ -1,4 +1,4 @@
-const CACHE_NAME = 'batabitoo-mail-v30';
+const CACHE_NAME = 'batabitoo-mail-v32-reader-attachments';
 const APP_SHELL = [
   '/',
   '/index.html',
