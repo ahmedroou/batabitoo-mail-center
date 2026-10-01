@@ -64,7 +64,8 @@ class GmailSyncService {
       syncedCount: Number(r.syncedCount ?? r.synced_count ?? 0),
       appPassword: r.appPassword || r.app_password || null,
       lastSeenUid: Number(r.lastSeenUid ?? r.last_seen_uid ?? 0) || null,
-      gmailHistoryId: r.gmailHistoryId || r.gmail_history_id || null
+      gmailHistoryId: r.gmailHistoryId || r.gmail_history_id || null,
+      scopes: r.scopes || null
     }));
   }
 
@@ -281,7 +282,7 @@ class GmailSyncService {
     }
   }
 
-  async connectOAuth({ email, refreshToken, accessToken, expiryDate, personName }) {
+  async connectOAuth({ email, refreshToken, accessToken, expiryDate, personName, scopes }) {
     const cleanEmail = String(email || '').trim().toLowerCase();
     const cleanName = String(personName || cleanEmail.split('@')[0]).trim();
 
@@ -309,6 +310,7 @@ class GmailSyncService {
     const accData = {
       email: cleanEmail,
       refreshToken: refreshToken || (idx >= 0 ? accounts[idx].refreshToken : null),
+      scopes: scopes || null,
       accessToken: accessToken || null,
       expiryDate: expiryDate || null,
       personName: cleanName,
@@ -517,6 +519,10 @@ class GmailSyncService {
           contentComplete: true,
           bodyStored: true,
           gmailUid: message.uid,
+          fromAddress,
+          rfcMessageId: parsed.messageId || null,
+          replyTo: parsed.replyTo?.value?.[0]?.address || null,
+          references: parsed.references || [],
           createdAt: rawPayload.createdAt
         };
 
@@ -813,6 +819,12 @@ class GmailSyncService {
         inboxEmail: exactRecipient,
         exactRecipient: exactRecipient,
         parentEmail: account.email,
+        gmailMessageId: item.id,
+        fromAddress,
+        gmailThreadId: msgData.threadId || item.threadId || null,
+        rfcMessageId: parsed.messageId || null,
+        replyTo: parsed.replyTo?.value?.[0]?.address || null,
+        references: parsed.references || [],
         isOfficialDomain: true,
         domain: 'gmail.com',
         isRealGmail: true,

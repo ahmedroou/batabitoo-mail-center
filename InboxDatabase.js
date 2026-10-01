@@ -256,16 +256,24 @@ class InboxDatabase {
 
   // --- AI Feedback & Evaluation ---
 
-  async saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason }) {
-    const entry = mailDatabase.saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason });
-    if (verdict === 'reject' && subject) {
+  async saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason, keepPattern }) {
+    const entry = mailDatabase.saveAiFeedback({ inboxId, messageId, verdict, subject, sender, reason, keepPattern });
+    if (verdict === 'reject' && subject && !keepPattern) {
       this._ignoredPatterns.add(subject.trim().toLowerCase());
       await this.setInboxBanStatus(inboxId, 'safe', `[تم استبعاد النمط] ${subject || reason}`);
+    } else if (verdict === 'recovered' || verdict === 'safe' || (verdict === 'reject' && keepPattern)) {
+      await this.setInboxBanStatus(inboxId, 'safe', `[تم استعادة الحساب] ${reason || 'الحساب سليم والنمط نشط'}`);
     } else if (verdict === 'confirm') {
       await this.setInboxBanStatus(inboxId, 'confirmed', `[تأكيد المستخدم] ${reason || 'إغلاق وتأكيد الحظر'}`);
     }
 
     return entry;
+  }
+
+  removeIgnoredPattern(pattern) {
+    const clean = String(pattern || '').trim().toLowerCase();
+    this._ignoredPatterns.delete(clean);
+    return mailDatabase.removeIgnoredPattern(pattern);
   }
 
   getAiFeedbackLogs(limit = 100) {

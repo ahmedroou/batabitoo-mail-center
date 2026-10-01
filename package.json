@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "server": "node inbox_server.js",
-    "test": "node --test test/official_create_cost.test.js test/sync_cost_regression.test.js test/cloud_cost_regression.test.js test/cloud_freshness.test.js test/cloud_data_model.test.js test/mobile_access.test.js test/mail_center.test.js test/validators.test.js test/test_database_safety.test.js",
+    "test": "node --test test/official_create_cost.test.js test/sync_cost_regression.test.js test/cloud_cost_regression.test.js test/cloud_freshness.test.js test/cloud_data_model.test.js test/mobile_access.test.js test/mail_center.test.js test/validators.test.js test/test_database_safety.test.js test/mail_reply.test.js",
+    "test:reply": "node --test test/mail_reply.test.js",
+    "test:reply-ui": "node scripts/verify_mail_reply.cjs",
     "test:integration": "node --test test/*.test.js",
     "migrate:cloud:plan": "node scripts/migrate_full_manifest_to_cloud.cjs",
     "migrate:cloud:stage": "node scripts/migrate_full_manifest_to_cloud.cjs --write"
@@ -31,6 +33,7 @@
     "imapflow": "^2.0.5",
     "mailparser": "^3.9.26",
     "next": "^16.3.5",
+    "nodemailer": "^10.0.13",
     "puppeteer-core": "^25.11.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

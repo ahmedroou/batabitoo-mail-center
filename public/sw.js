@@ -1,4 +1,4 @@
-const CACHE_NAME = 'batabitoo-mail-v32-reader-attachments';
+const CACHE_NAME = 'batabitoo-mail-v33-reply';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -6,6 +6,7 @@ const APP_SHELL = [
   '/amazon.css',
   '/reader.css',
   '/app.js',
+  '/reply.js',
   '/mail-scene.js',
   '/manifest.json',
   '/icon.svg'

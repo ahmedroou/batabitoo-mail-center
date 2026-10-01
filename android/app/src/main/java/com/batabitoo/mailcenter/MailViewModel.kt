@@ -16,6 +16,7 @@ import com.batabitoo.mailcenter.data.Inbox
 import com.batabitoo.mailcenter.data.MailMessage
 import com.batabitoo.mailcenter.data.MailAttachment
 import com.batabitoo.mailcenter.data.MailRepository
+import com.batabitoo.mailcenter.data.ReplyDraft
 import com.batabitoo.mailcenter.data.RegistrationLog
 import com.batabitoo.mailcenter.data.StorageStats
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,6 +66,7 @@ data class MailUiState(
     val selectedMessage: MailMessage? = null,
     val messageLoading: Boolean = false,
     val messageError: String? = null,
+    val replyDraft: ReplyDraft? = null,
     val search: String = "",
     val online: Boolean = false,
     val cloudConnected: Boolean = false,
@@ -688,7 +690,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 repository.setBanStatus(inbox.id, status)
             }.onSuccess {
-                val actionText = if (status == "confirmed") "تم تأكيد حظر الحساب ⛔" else "تم تأكيد سلامة الحساب ✅"
+                val actionText = if (status == "confirmed") "تم تأكيد حظر الحساب ⛔" else "تم تأكيد سلامة الحساب واستعادته ✅"
                 _uiState.update {
                     it.copy(
                         refreshing = false,
@@ -735,6 +737,48 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { repository.message(message.id) }
                 .onSuccess { full -> if (request == messageRequest) _uiState.update { it.copy(selectedMessage = full, messageLoading = false) } }
                 .onFailure { error -> if (request == messageRequest) _uiState.update { it.copy(messageLoading = false, messageError = error.message ?: "تعذر تحميل الرسالة") } }
+        }
+    }
+
+    private val replyDrafts = mutableMapOf<String, ReplyDraft>()
+
+    private fun updateReply(draft: ReplyDraft) {
+        replyDrafts[draft.messageId] = draft
+        _uiState.update { state -> if (state.replyDraft?.messageId == draft.messageId) state.copy(replyDraft = draft) else state }
+    }
+
+    fun openReply(message: MailMessage) {
+        val draft = replyDrafts.getOrPut(message.id) { ReplyDraft(message.id) }
+        _uiState.update { it.copy(replyDraft = draft) }
+        if (draft.context != null || draft.loading || draft.sending) return
+        updateReply(draft.copy(loading = true, status = "جارٍ التحقق من حساب الإرسال…"))
+        viewModelScope.launch {
+            runCatching { repository.replyContext(message.id) }
+                .onSuccess { context -> updateReply(replyDrafts.getValue(message.id).copy(context = context, loading = false, reconnect = false, status = "")) }
+                .onFailure { error -> updateReply(replyDrafts.getValue(message.id).copy(loading = false, status = error.message ?: "تعذر إعداد الرد", reconnect = (error as? ApiException)?.code == "GMAIL_RECONNECT_REQUIRED")) }
+        }
+    }
+
+    fun closeReply() { _uiState.update { it.copy(replyDraft = null) } }
+
+    fun editReply(text: String) {
+        val draft = _uiState.value.replyDraft ?: return
+        if (!draft.sending && !draft.locked) updateReply(draft.copy(text = text))
+    }
+
+    fun sendReply() {
+        val draft = _uiState.value.replyDraft ?: return
+        if (draft.sending || draft.locked || draft.context == null || draft.text.isBlank()) return
+        updateReply(draft.copy(sending = true, status = "جارٍ إرسال الرد…"))
+        viewModelScope.launch {
+            runCatching { repository.sendReply(draft) }
+                .onSuccess { from -> updateReply(draft.copy(sending = false, text = "", requestId = java.util.UUID.randomUUID().toString(), status = "تم إرسال الرد من $from")) }
+                .onFailure { error ->
+                    val api = error as? ApiException
+                    val uncertain = api == null || api.code == "REPLY_SEND_UNCERTAIN"
+                    updateReply(draft.copy(sending = false, locked = uncertain, reconnect = api?.code == "GMAIL_RECONNECT_REQUIRED",
+                        status = if (uncertain) "تعذر تأكيد نتيجة الإرسال. تحقق من «المرسلة» في Gmail قبل إرسال رد جديد." else error.message ?: "تعذر إرسال الرد"))
+                }
         }
     }
 

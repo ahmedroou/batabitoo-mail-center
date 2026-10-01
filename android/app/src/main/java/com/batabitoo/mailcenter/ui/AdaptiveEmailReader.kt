@@ -67,6 +67,7 @@ fun EmailReader(
     onPrevious: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
     onOpenAttachment: ((MailAttachment) -> Unit)? = null,
+    onReply: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -116,6 +117,13 @@ fun EmailReader(
                         onNext = onNext,
                     )
                     HorizontalDivider(color = Color(0xFFF0F1F6))
+                    if (onReply != null) {
+                        TextButton(onClick = onReply, enabled = !loading, modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp)) {
+                            Icon(Icons.Rounded.Reply, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("الرد من نفس حساب البريد")
+                        }
+                    }
                     if (wide) {
                         Row(Modifier.fillMaxSize()) {
                             ReaderOverview(

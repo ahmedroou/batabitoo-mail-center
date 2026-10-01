@@ -76,6 +76,7 @@ const db = require('./InboxDatabase');
 const emailParser = require('./EmailParser');
 const content = require('./MailContent');
 const gmailSync = require('./GmailSyncService');
+const { createMailReply, firestoreReplyStore } = require('./lib/mailReply');
 const { mailDatabase } = require('./CloudDatabase');
 const niveaWinnerSync = require('./NiveaWinnerSyncWorker');
 const auth = require('./auth');
@@ -806,7 +807,7 @@ const handleRequest = async (req, res) => {
         createdAt: new Date().toISOString()
       });
 
-      const scopes = encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email');
+      const scopes = encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email');
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent&code_challenge=${encodeURIComponent(pkce.challenge)}&code_challenge_method=S256&state=${encodeURIComponent(stateParam)}`;
       return sendJSON(200, { success: true, authUrl, redirectUri });
     }
@@ -889,6 +890,7 @@ const handleRequest = async (req, res) => {
           email: userEmail,
           refreshToken: tokenData.refresh_token,
           accessToken: tokenData.access_token,
+          scopes: tokenData.scope || '',
           expiryDate: new Date(Date.now() + Number(tokenData.expires_in || 3600) * 1000).toISOString(),
           personName: userEmail.split('@')[0]
         });
@@ -1360,6 +1362,19 @@ const handleRequest = async (req, res) => {
     // ============================================================
     // 11. GET /api/messages/:id
     // ============================================================
+    const replyRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/reply$/);
+    if (replyRoute && ['GET', 'POST'].includes(req.method)) {
+      const msgId = decodeURIComponent(replyRoute[1]);
+      const message = (db.findMessageById ? db.findMessageById(msgId) : null) || db.getAllMessages().find(item => item.id === msgId);
+      if (!message) return sendJSON(404, { error: 'الرسالة غير موجودة' });
+      try {
+        const reply = createMailReply({ gmail: gmailSync, store: firestoreReplyStore(mailDatabase.firestore) });
+        const result = req.method === 'GET' ? await reply.context(message) : await reply.send(message, await parseBody(128 * 1024));
+        return sendJSON(200, result);
+      } catch (error) {
+        return sendJSON(error.status || 502, { success: false, error: error.message, code: error.code || 'REPLY_FAILED' });
+      }
+    }
     const attachmentRoute = url.pathname.match(/^\/api\/messages\/([^/]+)\/attachments\/([^/]+)$/);
     if (attachmentRoute && req.method === 'GET') {
       const msgId = decodeURIComponent(attachmentRoute[1]);

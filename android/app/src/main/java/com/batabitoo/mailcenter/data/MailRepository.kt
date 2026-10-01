@@ -251,6 +251,20 @@ class MailRepository(context: Context) {
 
     suspend fun getGmailAccounts(): List<GmailAccount> = gmailAccounts()
 
+    suspend fun replyContext(id: String): ReplyContext = withContext(Dispatchers.IO) {
+        val result = JSONObject(request("/api/messages/${encodePath(id)}/reply"))
+        ReplyContext(result.getString("from"), result.getString("to"), result.getString("subject"))
+    }
+
+    suspend fun sendReply(draft: ReplyDraft): String = withContext(Dispatchers.IO) {
+        val context = requireNotNull(draft.context)
+        val body = JSONObject().put("text", draft.text).put("requestId", draft.requestId)
+            .put("from", context.from).put("to", context.to).toString()
+        val result = JSONObject(request("/api/messages/${encodePath(draft.messageId)}/reply", "POST", body, timeoutMs = 90000))
+        if (!result.optBoolean("success")) throw IOException("تعذر تأكيد نتيجة الإرسال")
+        result.getString("from")
+    }
+
     suspend fun syncGmail(email: String): GmailActionResult = withContext(Dispatchers.IO) {
         val body = JSONObject().put("email", email.trim().lowercase()).toString()
         MailJson.gmailAction(request("/api/gmail/sync", "POST", body))
@@ -362,12 +376,13 @@ class MailRepository(context: Context) {
         body: String? = null,
         skipAuth: Boolean = false,
         allowReauth: Boolean = true,
+        timeoutMs: Int = NETWORK_TIMEOUT_MS,
     ): String {
         val url = URL("$baseUrl$path")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = NETWORK_TIMEOUT_MS
-            readTimeout = NETWORK_TIMEOUT_MS
+            readTimeout = timeoutMs
             setRequestProperty("Accept", "application/json")
             if (!skipAuth) applyAuthentication(this)
             if (body != null) {
@@ -386,7 +401,7 @@ class MailRepository(context: Context) {
         connection.disconnect()
 
         if (code == HttpURLConnection.HTTP_UNAUTHORIZED && !skipAuth && allowReauth && refreshSession()) {
-            return request(path, method, body, skipAuth = false, allowReauth = false)
+            return request(path, method, body, skipAuth = false, allowReauth = false, timeoutMs = timeoutMs)
         }
 
         if (code !in 200..299) {

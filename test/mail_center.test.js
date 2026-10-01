@@ -149,3 +149,42 @@ test("Firestore-only runtime architecture", async t => {
     assert.match(gradle, /Official release signing is not configured/);
   });
 });
+
+test("ai feedback and account recovery behavior", () => {
+  const { spawnSync } = require("node:child_process");
+  const script = `
+    process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+    const { CloudMailDatabase } = require("./CloudDatabase");
+    const db = new CloudMailDatabase({ testMode: true, storageBucket: "demo-test-bucket" });
+    db.saveAiFeedback({
+      inboxId: "test_inbox_1",
+      verdict: "recovered",
+      subject: "action required: your amazon account is suspended",
+      keepPattern: true
+    });
+    if (db.getIgnoredPatterns().includes("action required: your amazon account is suspended")) {
+      console.error("Recovered verdict should keep pattern active!");
+      process.exit(1);
+    }
+    db.saveAiFeedback({
+      inboxId: "test_inbox_2",
+      verdict: "reject",
+      subject: "لقينا لك شيء يمكن يعجبك",
+      keepPattern: false
+    });
+    if (!db.getIgnoredPatterns().includes("لقينا لك شيء يمكن يعجبك")) {
+      console.error("Reject verdict should exclude pattern!");
+      process.exit(2);
+    }
+    process.exit(0);
+  `;
+
+  const result = spawnSync(process.execPath, ["-e", script], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    env: { ...process.env, FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080" }
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});

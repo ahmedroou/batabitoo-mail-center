@@ -1,9 +1,9 @@
 {
-  "latestVersionCode": 20,
-  "latestVersionName": "1.8.0",
-  "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.8.0/Batabitoo-Mail-Center-1.8.0.apk",
-  "sha256": "a32c425cb22abdbad109d1c5b62128306434305c43fdaaef87c80959f7e3dac8",
-  "releaseNotes": "إزالة البريد السريع المؤقت بالكامل والاعتماد الحصري على البريد الرسمي (@batabitoo.com و Gmail). إضافة تبويبات تصفية سريعة للشاشة الرئيسية (كل الرسمي، بطابيطو، Gmail). تحسينات شاملة للأداء والمظهر على الموبايل.",
+  "latestVersionCode": 21,
+  "latestVersionName": "1.8.1",
+  "downloadUrl": "https://github.com/ahmedroou/batabitoo-mail-center/releases/download/v1.8.1/Batabitoo-Mail-Center-1.8.1.apk",
+  "sha256": "02d0246c09d0fd88ec05aa6ece2f3ac18cd39340ba9b5344ca71a1267e47f42d",
+  "releaseNotes": "إضافة خيار استعادة الحساب السليم مع الإبقاء على نمط الحظر نشطاً، وإتاحة إعادة الحسابات المحظورة إلى الحالة السليمة مباشرة، وتحسينات في كشف الإشعارات وتجربة الاستخدام.",
   "mandatory": false,
-  "updatedAt": "2026-09-30T10:00:00.000Z"
+  "updatedAt": "2026-10-01T17:05:00.000Z"
 }

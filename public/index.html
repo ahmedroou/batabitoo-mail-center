@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=18">
-  <link rel="stylesheet" href="/reader.css?v=2">
+  <link rel="stylesheet" href="/reader.css?v=3">
   <link rel="stylesheet" href="/amazon.css?v=2">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
@@ -246,6 +246,7 @@
             </div>
             <div class="reader-actions">
               <button class="reader-tool" id="reader-print-btn" type="button" title="طباعة الرسالة"><svg viewBox="0 0 24 24"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg></button>
+              <button class="reader-tool" id="reader-reply-btn" type="button" title="الرد من نفس حساب البريد" aria-label="الرد من نفس حساب البريد" disabled><svg viewBox="0 0 24 24"><path d="m9 10-5 5 5 5M4 15h10a6 6 0 0 0 0-12"/></svg></button>
               <button class="reader-tool" id="reader-retry-btn" type="button" aria-label="إعادة تحميل الرسالة" title="إعادة تحميل"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-15-3M4 4v5h5M4 13a8 8 0 0 0 15 3m1 4v-5h-5"/></svg></button>
               <button class="soft-button" id="reader-copy-all-btn" type="button" title="نسخ نص الرسالة">
                 <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
@@ -282,11 +283,12 @@
               <div class="learning-icon">🧠</div>
               <div class="learning-copy">
                 <strong>تدريب القواعد وتوجيه النظام</strong>
-                <p>هل تعني هذه الرسالة إغلاق/تقييد الحساب؟ قرارك يدرّب القواعد التلقائية فوراً.</p>
+                <p>هل تعني هذه الرسالة إغلاق/تقييد الحساب؟ حدد حالة الحساب وقواعد الكشف.</p>
               </div>
               <div class="learning-actions">
-                <button class="btn-confirm-ban" id="reader-confirm-rule-btn" type="button" title="تأكيد إغلاق الحساب">تأكيد الحظر ⛔</button>
-                <button class="btn-reject-rule" id="reader-reject-rule-btn" type="button" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
+                <button class="btn-confirm-ban" id="reader-confirm-rule-btn" type="button" title="تأكيد إغلاق وحظر الحساب">تأكيد الحظر ⛔</button>
+                <button class="btn-mark-recovered" id="reader-recover-btn" type="button" title="الحساب سليم أو تمت استعادته مع إبقاء نمط الحظر نشطًا للحسابات الأخرى">الحساب سليم (تمت استعادته) ✅</button>
+                <button class="btn-reject-rule" id="reader-reject-rule-btn" type="button" title="استبعاد هذا النمط تمامًا كإنذار خاطئ">استبعاد النمط (تنبيه خاطئ) ❌</button>
               </div>
             </div>
 
@@ -335,6 +337,18 @@
             <div class="reader-paper-label"><span>محتوى الرسالة الكامل</span><span id="reader-content-status" role="status">جاري التحميل…</span></div>
             <iframe id="reader-frame" title="محتوى الرسالة الكامل" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
           </div>
+          <form id="reader-reply-form" class="reader-reply hidden" aria-label="الرد على الرسالة">
+            <h3>الرد على الرسالة</h3>
+            <p id="reply-envelope" dir="auto"></p>
+            <p id="reply-status" role="status" aria-live="polite"></p>
+            <label for="reply-text">نص الرد</label>
+            <textarea id="reply-text" rows="6" maxlength="90000" dir="auto" placeholder="اكتب ردك هنا…" required></textarea>
+            <div class="reply-actions">
+              <button id="reply-send" class="soft-button" type="submit" disabled>إرسال الرد</button>
+              <button id="reply-cancel" class="soft-button" type="button">إغلاق</button>
+              <button id="reply-reconnect" class="soft-button hidden" type="button">ربط Google ومنح صلاحية الإرسال</button>
+            </div>
+          </form>
         </section>
       </section>
     </main>
@@ -598,6 +612,7 @@
   <div class="toast" id="toast"><span id="toast-icon">✓</span><p id="toast-message">تم</p></div>
   <script type="module" src="/mail-scene.js?v=2"></script>
   <script src="/vendor/pdf.min.js"></script>
-  <script src="/app.js?v=35" defer></script>
+  <script src="/app.js?v=36" defer></script>
+  <script src="/reply.js?v=1" defer></script>
 </body>
 </html>

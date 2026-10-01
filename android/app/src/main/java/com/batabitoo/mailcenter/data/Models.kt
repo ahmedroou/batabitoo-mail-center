@@ -114,6 +114,20 @@ data class GmailAccount(
     val syncedCount: Int = 0,
 )
 
+data class ReplyContext(val from: String, val to: String, val subject: String)
+
+data class ReplyDraft(
+    val messageId: String,
+    val requestId: String = java.util.UUID.randomUUID().toString(),
+    val text: String = "",
+    val context: ReplyContext? = null,
+    val loading: Boolean = false,
+    val sending: Boolean = false,
+    val locked: Boolean = false,
+    val reconnect: Boolean = false,
+    val status: String = "",
+)
+
 data class GmailAccountsPayload(
     val success: Boolean = false,
     val accounts: List<GmailAccount> = emptyList(),

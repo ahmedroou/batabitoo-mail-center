@@ -858,6 +858,17 @@ class CloudMailDatabase {
     this._persistBootstrap(['ignoredPatterns']);
     return true;
   }
+  removeIgnoredPattern(pattern) {
+    const clean = String(pattern || "").trim().toLowerCase();
+    if (!clean) return false;
+    const before = this.cache.ignoredPatterns.length;
+    this.cache.ignoredPatterns = this.cache.ignoredPatterns.filter(p => p !== clean);
+    if (this.cache.ignoredPatterns.length !== before) {
+      this._persistBootstrap(['ignoredPatterns']);
+      return true;
+    }
+    return false;
+  }
 
   getDeletedAmazonAccounts() {
     return [...(this.cache.deletedAmazonAccounts || [])];
@@ -1044,7 +1055,7 @@ class CloudMailDatabase {
     const id = entry.id || `fb_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
     const normalized = { ...clone(entry), id, createdAt: new Date().toISOString() };
     this.cache.aiFeedback.unshift(normalized);
-    if (entry.verdict === "reject" && entry.subject) this.addIgnoredPattern(entry.subject);
+    if (entry.verdict === "reject" && entry.subject && !entry.keepPattern) this.addIgnoredPattern(entry.subject);
     this._appendAux("aiFeedback", normalized);
     return normalized;
   }

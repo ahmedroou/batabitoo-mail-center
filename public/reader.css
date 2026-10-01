@@ -1074,3 +1074,14 @@ body[data-screen="reader"] { padding-bottom:0; }
     padding: 8px;
   }
 }
+.reader-reply { margin: 16px 0; padding: 20px; border: 1px solid #dce5df; border-radius: 16px; background: #fff; }
+.reader-reply h3 { margin: 0 0 12px; }
+.reader-reply p { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.7; }
+.reader-reply label { display: block; margin-bottom: 8px; }
+.reader-reply textarea { display: block; width: 100%; box-sizing: border-box; min-height: 150px; resize: vertical; padding: 12px; border: 1px solid #b6cbbf; border-radius: 10px; font: inherit; }
+.reader-reply textarea:focus { outline: 2px solid #3d7861; outline-offset: 2px; }
+.reply-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.reply-actions button:disabled { opacity: .55; cursor: default; }
+.reader-reply { flex-shrink: 0; }
+.reply-actions #reply-send { background: #25664c; color: #fff; border-color: #25664c; }
+@media print { .reader-reply { display: none !important; } }

@@ -252,13 +252,22 @@ private fun AmazonIdentityCard(inbox: Inbox, enabled: Boolean, onCopy: () -> Uni
                     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(inbox.banReason.ifBlank { "ورد إشعار يحتاج إلى مراجعتك لتحديد حالة الحساب." }, color = AmazonAlert, style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = onSafe, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 6.dp), shape = RoundedCornerShape(12.dp)) { Text("الحساب سليم", color = AmazonGood) }
-                            OutlinedButton(onClick = onBan, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 6.dp), shape = RoundedCornerShape(12.dp)) { Text("تأكيد الحظر", color = AmazonDanger) }
+                            OutlinedButton(onClick = onSafe, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 6.dp), shape = RoundedCornerShape(12.dp)) { Text("سليم (مستعاد) ✅", color = AmazonGood) }
+                            OutlinedButton(onClick = onBan, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 6.dp), shape = RoundedCornerShape(12.dp)) { Text("تأكيد الحظر ⛔", color = AmazonDanger) }
                         }
                         TextButton(onClick = onVerify, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Rounded.Bolt, null, Modifier.size(18.dp), tint = AmazonAlert); Spacer(Modifier.width(6.dp)); Text("تحليل الإشعار بالذكاء الاصطناعي", color = AmazonAlert) }
                     }
                 }
-            } else if (inbox.isConfirmedBanned && inbox.banReason.isNotBlank()) Text(inbox.banReason, color = AmazonDanger, style = MaterialTheme.typography.bodySmall)
+            } else if (inbox.isConfirmedBanned) {
+                Surface(color = Color(0xFFFEE2E2), shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (inbox.banReason.isNotBlank()) Text(inbox.banReason, color = AmazonDanger, style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = onSafe, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp), shape = RoundedCornerShape(12.dp)) {
+                            Text("إعادة كحساب سليم (تمت استعادته) ✅", color = AmazonGood)
+                        }
+                    }
+                }
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = onOpen, modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = AmazonGraphite)) { Icon(Icons.Rounded.MailOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("فتح البريد · ${inbox.messageCount}", fontWeight = FontWeight.Bold) }
                 IconButton(onClick = { confirmDelete = true }, enabled = enabled, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(AmazonPaper)) { Icon(Icons.Rounded.DeleteOutline, "استبعاد الحساب", tint = AmazonQuiet) }

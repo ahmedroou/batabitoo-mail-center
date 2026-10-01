@@ -457,9 +457,19 @@ private fun HomeMailboxCard(inbox: Inbox, active: Boolean, selected: Boolean, se
                 Column(Modifier.padding(top = 10.dp)) {
                     Text(inbox.banReason.ifBlank { "راجع حالة الحساب لتأكيد الحظر أو اعتباره سليمًا." }, color = HomeDanger, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        TextButton(onClick = { actions.ban(inbox, "confirmed") }) { Text("تأكيد الحظر", color = HomeDanger, fontSize = 11.sp) }
-                        TextButton(onClick = { actions.ban(inbox, "safe") }) { Text("الحساب سليم", color = HomeInk, fontSize = 11.sp) }
+                        TextButton(onClick = { actions.ban(inbox, "confirmed") }) { Text("تأكيد الحظر ⛔", color = HomeDanger, fontSize = 11.sp) }
+                        TextButton(onClick = { actions.ban(inbox, "safe") }) { Text("سليم (مستعاد) ✅", color = HomeInk, fontSize = 11.sp) }
                         TextButton(onClick = { actions.verify(inbox) }) { Text("فحص", color = HomeGold, fontSize = 11.sp) }
+                    }
+                }
+            } else if (inbox.isConfirmedBanned) {
+                Column(Modifier.padding(top = 6.dp)) {
+                    TextButton(
+                        onClick = { actions.ban(inbox, "safe") },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        Text("إعادة كحساب سليم (تمت استعادته) ✅", color = HomeInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }

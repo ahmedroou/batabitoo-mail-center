@@ -286,7 +286,11 @@ fun MailCenterApp(viewModel: MailViewModel = viewModel()) {
             onPrevious = { viewModel.navigateMessage(-1) },
             onNext = { viewModel.navigateMessage(1) },
             onOpenAttachment = { attachment -> viewModel.openAttachment(selected, attachment) },
+            onReply = { viewModel.openReply(selected) },
         )
+    }
+    state.replyDraft?.let { draft ->
+        ReplyDialog(draft, viewModel::editReply, viewModel::sendReply, viewModel::closeReply, viewModel::startGmailOAuth)
     }
     val appUpdate = state.appUpdate
     if (state.showUpdateDialog && appUpdate != null) {
@@ -559,7 +563,7 @@ private fun BanConfirmationBox(
                     modifier = Modifier.weight(1f).height(30.dp),
                 ) {
                     Text(
-                        "الحساب سليم ✅",
+                        "سليم (مستعاد) ✅",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                     )
@@ -1356,7 +1360,7 @@ private fun AmazonAccountCard(
                 )
             }
 
-            // 3. Suspected Ban Prompt if needed
+            // 3. Suspected Ban Prompt or Banned Recovery if needed
             if (inbox.isSuspected && onConfirmBan != null && onMarkSafe != null) {
                 BanConfirmationBox(
                     reason = inbox.banReason,
@@ -1364,6 +1368,17 @@ private fun AmazonAccountCard(
                     onMarkSafe = onMarkSafe,
                     onAiVerify = onAiVerify,
                 )
+            } else if (inbox.isConfirmedBanned && onMarkSafe != null) {
+                OutlinedButton(
+                    onClick = onMarkSafe,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, Green),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Green),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().height(32.dp),
+                ) {
+                    Text("إعادة كحساب سليم (تمت استعادته) ✅", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             // 4. Action Row at Bottom

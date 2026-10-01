@@ -867,10 +867,16 @@ function bindEvents() {
       submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
       return;
     }
+    const recoverBtn = event.target.closest('[data-mark-recovered]');
+    if (recoverBtn) {
+      event.stopPropagation();
+      submitAiFeedback(recoverBtn.dataset.markRecovered, recoverBtn.dataset.msgId, 'recovered', recoverBtn.dataset.msgSubject, true);
+      return;
+    }
     const safeBtn = event.target.closest('[data-mark-safe]');
     if (safeBtn) {
       event.stopPropagation();
-      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject, false);
       return;
     }
     const aiBtn = event.target.closest('[data-ai-verify]');
@@ -906,10 +912,16 @@ function bindEvents() {
       submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
       return;
     }
+    const recoverBtn = event.target.closest('[data-mark-recovered]');
+    if (recoverBtn) {
+      event.stopPropagation();
+      submitAiFeedback(recoverBtn.dataset.markRecovered, recoverBtn.dataset.msgId, 'recovered', recoverBtn.dataset.msgSubject, true);
+      return;
+    }
     const safeBtn = event.target.closest('[data-mark-safe]');
     if (safeBtn) {
       event.stopPropagation();
-      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject, false);
       return;
     }
     const aiBtn = event.target.closest('[data-ai-verify]');
@@ -1000,6 +1012,8 @@ function bindEvents() {
     if (copy) { copyText(decodeURIComponent(copy.dataset.amazonCopy), 'تم نسخ عنوان البريد'); return; }
     const confirm = event.target.closest('[data-confirm-ban]');
     if (confirm) { updateBanStatus(confirm.dataset.confirmBan, 'confirmed', confirm.dataset.reason || ''); return; }
+    const recover = event.target.closest('[data-mark-recovered]');
+    if (recover) { updateBanStatus(recover.dataset.markRecovered, 'safe', recover.dataset.reason || 'تم استعادة الحساب (النمط نشط)'); return; }
     const safe = event.target.closest('[data-mark-safe]');
     if (safe) { updateBanStatus(safe.dataset.markSafe, 'safe'); return; }
     const ai = event.target.closest('[data-ai-verify]');
@@ -1063,10 +1077,16 @@ function bindEvents() {
       submitAiFeedback(confirmBtn.dataset.confirmBan, confirmBtn.dataset.msgId, 'confirm', confirmBtn.dataset.msgSubject);
       return;
     }
+    const recoverBtn = event.target.closest('[data-mark-recovered]');
+    if (recoverBtn) {
+      event.stopPropagation();
+      submitAiFeedback(recoverBtn.dataset.markRecovered, recoverBtn.dataset.msgId, 'recovered', recoverBtn.dataset.msgSubject, true);
+      return;
+    }
     const safeBtn = event.target.closest('[data-mark-safe]');
     if (safeBtn) {
       event.stopPropagation();
-      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject);
+      submitAiFeedback(safeBtn.dataset.markSafe, safeBtn.dataset.msgId, 'reject', safeBtn.dataset.msgSubject, false);
       return;
     }
     const aiBtn = event.target.closest('[data-ai-verify]');
@@ -1162,14 +1182,21 @@ function bindEvents() {
     const inboxId = banner?.getAttribute('data-inbox-id');
     const msgId = banner?.getAttribute('data-msg-id');
     const subject = banner?.getAttribute('data-msg-subject');
-    if (inboxId) submitAiFeedback(inboxId, msgId, 'confirm', subject);
+    if (inboxId) submitAiFeedback(inboxId, msgId, 'confirm', subject, true);
+  });
+  $('reader-recover-btn')?.addEventListener('click', () => {
+    const banner = $('reader-learning-banner');
+    const inboxId = banner?.getAttribute('data-inbox-id');
+    const msgId = banner?.getAttribute('data-msg-id');
+    const subject = banner?.getAttribute('data-msg-subject');
+    if (inboxId) submitAiFeedback(inboxId, msgId, 'recovered', subject, true);
   });
   $('reader-reject-rule-btn')?.addEventListener('click', () => {
     const banner = $('reader-learning-banner');
     const inboxId = banner?.getAttribute('data-inbox-id');
     const msgId = banner?.getAttribute('data-msg-id');
     const subject = banner?.getAttribute('data-msg-subject');
-    if (inboxId) submitAiFeedback(inboxId, msgId, 'reject', subject);
+    if (inboxId) submitAiFeedback(inboxId, msgId, 'reject', subject, false);
   });
 
   window.addEventListener('popstate', event => {
@@ -1466,9 +1493,9 @@ function isOfficialMessage(message) {
 }
 
 async function api(path, options = {}) {
-  const { responseType, ...fetchOptions } = options;
+  const { responseType, timeoutMs = 25000, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const token = localStorage.getItem(SESSION_TOKEN_KEY) || sessionStorage.getItem(SESSION_TOKEN_KEY);
   const headers = {
     'Content-Type': 'application/json',
@@ -1497,7 +1524,7 @@ async function api(path, options = {}) {
     if (response.ok && responseType === 'blob') return await response.blob();
     const data = await response.json().catch(() => ({}));
     if (response.ok) return data;
-    throw new Error(data.error || `HTTP ${response.status}`);
+    throw Object.assign(new Error(data.error || `HTTP ${response.status}`), { code: data.code, status: response.status });
   } finally {
     clearTimeout(timeout);
   }
@@ -1616,11 +1643,16 @@ function findSuspectedMessageForInbox(inbox) {
   return allMsgs.find(m => (String(m.inboxEmail || '').toLowerCase().trim() === email || formatAddress(m.to).toLowerCase().includes(email)) && isBannedMessage(m));
 }
 
-async function submitAiFeedback(inboxId, messageId, verdict, subject = '') {
+async function submitAiFeedback(inboxId, messageId, verdict, subject = '', keepPattern = false) {
   const isConfirm = verdict === 'confirm' || verdict === 'banned';
+  const isRecovered = verdict === 'recovered' || verdict === 'safe' || Boolean(keepPattern);
   const banStatus = isConfirm ? 'confirmed' : 'safe';
   const inbox = findInboxById(inboxId);
-  const reason = isConfirm ? 'إغلاق وتأكيد الحظر' : 'استبعاد النمط وتدريب الكود';
+  const reason = isConfirm
+    ? 'إغلاق وتأكيد الحظر'
+    : isRecovered
+      ? 'تم استعادة الحساب (النمط نشط)'
+      : 'استبعاد النمط وتدريب الكود (إنذار خاطئ)';
 
   const persisted = await updateBanStatus(inboxId, banStatus, reason);
   if (!persisted) return;
@@ -1631,7 +1663,13 @@ async function submitAiFeedback(inboxId, messageId, verdict, subject = '') {
     await api('/api/ai/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inboxId, messageId, verdict, subject })
+      body: JSON.stringify({
+        inboxId,
+        messageId,
+        verdict: isConfirm ? 'confirm' : isRecovered ? 'recovered' : 'reject',
+        subject,
+        keepPattern: isConfirm || isRecovered
+      })
     });
   } catch (err) {
     // Ignore secondary feedback log errors
@@ -2103,10 +2141,11 @@ function renderInboxes() {
         <span>${html(inbox.email || '')}</span>
         ${suspected ? `
         <div class="ban-confirm-inline">
-          <span class="ban-confirm-q">اشتباه حظر بانتظار تأكيدك أو استبعاد النمط:</span>
+          <span class="ban-confirm-q">اشتباه حظر بانتظار قرارك:</span>
           <div class="ban-confirm-btns">
-            ${suspectMsg ? `<button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(suspectMsg.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>` : ''}
+            ${suspectMsg ? `<button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(suspectMsg.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة</button>` : ''}
             <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-recovered" type="button" data-mark-recovered="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="الحساب سليم أو تمت استعادته مع الإبقاء على كشف النمط مستقبلاً">الحساب سليم (تمت استعادته) ✅</button>
             <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox.id)}" data-msg-id="${attr(suspectMsg?.id || '')}" data-msg-subject="${attr(suspectMsg?.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
@@ -2554,7 +2593,8 @@ function renderAmazonInboxesReel() {
       <button class="amazon-account-email" type="button" data-amazon-copy="${attr(encodeURIComponent(email))}" title="نسخ البريد"><span dir="ltr">${html(email)}</span><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
       ${isDotted && parentEmail ? `<div class="amz-parent-tag">مرتبط بالحساب المضيف: <span dir="ltr">${html(parentEmail)}</span></div>` : ''}
       ${banned && inbox.banReason ? `<p class="amazon-account-reason">${html(inbox.banReason)}</p>` : ''}
-      ${suspected ? `<div class="amazon-review-actions"><span>هل الحساب محظور فعلًا؟</span><button type="button" data-confirm-ban="${attr(inbox.id || email)}" data-reason="${attr(inbox.banReason || '')}">تأكيد الحظر</button><button type="button" data-mark-safe="${attr(inbox.id || email)}">الحساب سليم</button><button type="button" data-ai-verify="${attr(inbox.id || email)}">فحص AI</button></div>` : ''}
+      ${banned ? `<div class="amazon-review-actions amazon-banned-actions"><button type="button" class="btn-mark-recovered" data-mark-recovered="${attr(inbox.id || email)}" data-reason="تم استعادة الحساب">إعادة كحساب سليم (تمت استعادته) ✅</button></div>` : ''}
+      ${suspected ? `<div class="amazon-review-actions"><span>هل الحساب محظور فعلًا؟</span><button type="button" data-confirm-ban="${attr(inbox.id || email)}" data-reason="${attr(inbox.banReason || '')}">تأكيد الحظر ⛔</button><button type="button" class="btn-mark-recovered" data-mark-recovered="${attr(inbox.id || email)}" data-reason="تم استعادة الحساب">سليم (مستعاد) ✅</button><button type="button" data-mark-safe="${attr(inbox.id || email)}">استبعاد النمط ❌</button><button type="button" data-ai-verify="${attr(inbox.id || email)}">فحص AI</button></div>` : ''}
       <footer>
         <button type="button" data-amazon-messages="${attr(encodeURIComponent(email))}">عرض رسائل الحساب <span>←</span></button>
         <div style="display:flex;align-items:center;gap:6px;">
@@ -2604,7 +2644,8 @@ function renderAmazonMessages() {
     const recipient = (message.exactRecipient || message.inboxEmail || extractCleanEmail(message.to) || '').toLowerCase().trim();
     const inbox = findInboxByEmail(recipient);
     const isBanned = isConfirmedBanned(inbox);
-    const isSuspected = !isBanned && (hasBanContent || isSuspectedInbox(inbox));
+    const isInboxSafe = Boolean(inbox && inbox.banStatus === 'safe');
+    const isSuspected = !isBanned && !isInboxSafe && (hasBanContent || isSuspectedInbox(inbox));
     const reason = getBanReason(message);
     const isOrder = isAmazonOrderMessage(message);
 
@@ -2627,6 +2668,7 @@ function renderAmazonMessages() {
           <div class="ban-confirm-btns">
             <button class="btn-view-suspect" type="button" data-open-message="${attr(encodeURIComponent(message.id))}" title="معاينة الرسالة التي تسببت في الاشتباه">🔍 معاينة الرسالة</button>
             <button class="btn-confirm-ban" type="button" data-confirm-ban="${attr(inbox?.id || recipient)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="تأكيد الحظر">تأكيد الحظر ⛔</button>
+            <button class="btn-mark-recovered" type="button" data-mark-recovered="${attr(inbox?.id || recipient)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="الحساب سليم أو تمت استعادته مع الإبقاء على كشف النمط مستقبلاً">الحساب سليم (تمت استعادته) ✅</button>
             <button class="btn-mark-safe" type="button" data-mark-safe="${attr(inbox?.id || recipient)}" data-msg-id="${attr(message.id)}" data-msg-subject="${attr(message.subject || '')}" title="استبعاد هذا النمط وتدريب الكود">استبعاد النمط ❌</button>
           </div>
         </div>` : ''}
@@ -2642,7 +2684,7 @@ function renderAmazonHub() {
   const suspectedMsgs = amzMsgs.filter(m => {
     const recipient = (m.exactRecipient || m.inboxEmail || extractCleanEmail(m.to) || '').toLowerCase().trim();
     const inbox = findInboxByEmail(recipient);
-    if (inbox && isConfirmedBanned(inbox)) return false;
+    if (inbox && (isConfirmedBanned(inbox) || inbox.banStatus === 'safe')) return false;
     return isBannedMessage(m) || isSuspectedInbox(inbox);
   });
   const bannedMsgs = amzMsgs.filter(m => {
@@ -2863,6 +2905,8 @@ async function openMessage(id, pushHistory = true) {
   $('reader-attachments').classList.add('hidden');
   $('reader-attachments').replaceChildren();
   $('reader-copy-all-btn').disabled = true;
+  window.mailReply?.reset();
+  if ($('reader-reply-btn')) $('reader-reply-btn').disabled = true;
   $('reader-retry-btn').disabled = true;
   document.querySelector('.reader-content-card')?.setAttribute('aria-busy', 'true');
   $('reader-content-status').textContent = 'جاري التحميل…';
@@ -2900,6 +2944,7 @@ async function openMessage(id, pushHistory = true) {
     }
     if (request !== readerRequest || state.currentMessage?.id !== id) return;
     state.currentMessage = message;
+    if ($('reader-reply-btn')) $('reader-reply-btn').disabled = false;
 
     const sender = cleanSenderName(message.from, message.subject);
     const recipient = formatAddress(message.to) || message.inboxEmail || state.activeInbox?.email || '—';
@@ -2956,7 +3001,8 @@ async function openMessage(id, pushHistory = true) {
     const learningBanner = $('reader-learning-banner');
     if (learningBanner) {
       const parentInbox = state.activeInbox || findInboxByEmail(message.inboxEmail);
-      const isSuspected = isBanned || isSuspectedInbox(parentInbox) || isBannedMessage(message);
+      const isInboxSafe = Boolean(parentInbox && parentInbox.banStatus === 'safe');
+      const isSuspected = !isInboxSafe && (isBanned || isSuspectedInbox(parentInbox) || isBannedMessage(message));
       if (isSuspected && parentInbox) {
         learningBanner.classList.remove('hidden');
         learningBanner.setAttribute('data-inbox-id', parentInbox.id);
@@ -3261,6 +3307,7 @@ async function downloadReaderAttachment(button) {
 }
 
 function closeReader(updateHistory = true) {
+  window.mailReply?.reset();
   ++readerRequest;
   stopReaderResize();
   state.currentMessage = null;
